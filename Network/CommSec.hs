@@ -19,7 +19,7 @@ import Foreign.Ptr
 import Foreign.Storable
 import System.IO.Unsafe
 
--- Packet format:
+-- IPSec inspired packet format:
 --
 --      [CNT | IV | Payload | Pad | ICV]
 --           ^-------------------------^
@@ -29,8 +29,8 @@ import System.IO.Unsafe
 
 data OutContext =
     Out { seq        :: {-# UNPACK #-} !Word64
+        , aesCtr     :: {-# UNPACK #-} !Word64
         , outKey     :: AES.Key
-        , aesCtr     :: AES.IV
         }
 
 data InContext =
@@ -39,10 +39,19 @@ data InContext =
         , inKey     :: AES.Key
         }
 
+encryptGCM :: AES.Key -> Word64 -> Word64 -> ByteString -> (ByteString, ByteString)
+encryptGCM key aesCtr aad pt = do
+    alloca 8 $ \ptrIV -> alloca 8 $ \ptrAAD -> do
+     B.unsafeUseAsCString pt $ \ptPtr -> do
+        B.unsafeCreate (B.length pt) $ \ctPtr -> do
+        pokeBE ptrIV aesCtr
+        pokeBE ptrAAD aad
+        AESPtr.encryptGCM ctPtr ptrResult key ptrIV ptrAAD ptPtr
+
 -- |Use an 'OutContext' to protect a message for transport.
 send :: OutContext -> ByteString -> (ByteString, OutContext)
 send ctx@(Out {..}) pt =
-    let (ct,tag) = AES.encryptGCM outKey aesCtr cnt (pad pt)
+    let (ct,tag) = encryptGCM outKey aesCtr cnt (pad pt)
         cnt = B.unsafeCreate (B.length pt + sizeOf seq) $ \ptr -> pokeBE ptr seq
     in (B.concat [cnt,aesCtr,ct,tag], ctx { seq = seq + 1, aesCtr = AES.incIV aesCtr })
 
