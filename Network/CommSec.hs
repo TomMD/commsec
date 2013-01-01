@@ -1,8 +1,12 @@
 {-# LANGUAGE BangPatterns, RecordWildCards #-}
+-- | CommSec, for communications security.
 module Network.CommSec
-    ( OutContext(..)
+    ( -- * Types
+      OutContext(..)
     , InContext(..)
+      -- * Build contexts for use sending and receiving
     , newInContext, newOutContext
+      -- Encryption and decryption routines
     , recv
     , send
     ) where
@@ -30,12 +34,14 @@ import System.IO.Unsafe
 --
 --      [CNT (IV and seq) | Payload | Pad | ICV]
 
+-- | A context useful for sending data.
 data OutContext =
     Out { aesCtr     :: {-# UNPACK #-} !Word64
         , saltOut    :: {-# UNPACK #-} !Word32
         , outKey     :: AESKey
         }
 
+-- | A context useful for receiving data.
 data InContext =
     In  { base      :: {-# UNPACK #-} !Word64
         , mask      :: {-# UNPACK #-} !Word64
@@ -43,6 +49,8 @@ data InContext =
         , inKey     :: AESKey
         }
 
+-- | Given at least 24 bytes of entropy, produce an out context that can
+-- communicate with an identically initialized in context.
 newOutContext :: ByteString -> OutContext
 newOutContext bs
     | B.length bs < 24 = error "Not enough entropy"
@@ -52,6 +60,8 @@ newOutContext bs
             outKey  = fromMaybe (error "Could not build a key") $ buildKey $ B.drop (sizeOf saltOut) bs
         in Out {..}
 
+-- | Given at least 24 bytes of entropy, produce an in context that can
+-- communicate with an identically initialized out context.
 newInContext  :: ByteString -> InContext
 newInContext bs
     | B.length bs < 24 = error "Not enough entropy"
