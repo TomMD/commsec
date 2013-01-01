@@ -17,4 +17,4 @@ cabal-version:       >=1.8
 library
   exposed-modules:     Network.CommSec
   -- other-modules:       
-  build-depends:       base >4.6 && < 5, cipher-aes, bytestring
+  build-depends:       base >4.5 && < 5, cipher-aes128, bytestring, crypto-api
