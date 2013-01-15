@@ -6,10 +6,11 @@
 --
 -- Do not reuse the shared secret!  Key agreement mechanisms that leverage
 -- PKI might be added later.
-module Network.CommSec
+module Network.CommSec.Package
     ( -- * Types
       OutContext(..)
     , InContext(..)
+    , CommSecError(..)
     -- , Secret, Socket
       -- * Build contexts for use sending and receiving
     , newInContext, newOutContext -- , newSecret
@@ -19,11 +20,18 @@ module Network.CommSec
      -- * IO / Pointer based encryption and decryption routines
     , decodePtr
     , encodePtr
+    -- * Utility functions
+    , encBytes, decBytes
      -- * Wrappers for network sending and receiving
     -- , send, recv
     -- , sendPtr, recvPtr
     -- , connect, unsafeConnect
     -- , listen, unsafeListen
+    -- * Utilities
+    , peekBE32
+    , pokeBE32
+    , peekBE
+    , pokeBE
     ) where
 
 import Prelude hiding (seq)
@@ -57,7 +65,7 @@ gCtrSize  = 8
 
 -- IPSec inspired packet format:
 --
---      [CNT (IV and seq) | Payload | Pad | ICV]
+--      [CNT (used for both the IV and seq) | CT of Payload + Pad | ICV]
 
 -- | A context useful for sending data.
 data OutContext =

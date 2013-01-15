@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                commsec
-version:             0.1
+version:             0.2
 synopsis:            Communications security
  description:        A basic communications security package that provides confidentiallity, integrity and replay detection.
 license:             BSD3
@@ -15,9 +15,10 @@ build-type:          Simple
 cabal-version:       >=1.8
 
 library
-  exposed-modules:     Network.CommSec
+  exposed-modules:     Network.CommSec, Network.CommSec.Package
   -- other-modules:       
   build-depends:       base >4.5 && < 5,
-                       cipher-aes128,
+                       cipher-aes128 >= 0.2,
                        bytestring,
-                       crypto-api
+                       crypto-api,
+                       network
