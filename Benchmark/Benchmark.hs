@@ -37,6 +37,8 @@ main = do
   let secret = B.replicate 32 0
       port1 = 1982
       port2 = 9843
+      port3 = 2982
+      port4 = 3843
 
   aw1 <- async $ accept secret port1 Stream
   threadDelay 10000
@@ -48,6 +50,17 @@ main = do
   threadDelay 10000
   c2 <- connect secret "127.0.0.1" port2 Stream
   a2 <- wait aw2
+
+  aw3 <- async $ acceptUnsafe secret port3 Stream
+  threadDelay 10000
+  c3 <- connectUnsafe secret "127.0.0.1" port3 Stream
+  a3 <- wait aw3
+  forkIO (forever $ recvUnsafe a3)
+
+  aw4 <- async $ acceptUnsafe secret port4 Stream
+  threadDelay 10000
+  c4 <- connectUnsafe secret "127.0.0.1" port4 Stream
+  a4 <- wait aw4
 
   defaultMain [ bench "encode 16b" $   nf (fst . encode ctxOut) x16
               , bench "encode 32b" $   nf (fst . encode ctxOut) x32
@@ -68,6 +81,9 @@ main = do
               , bench "send stream 16b" $ send c1 x16
               , bench "send stream 2048b" $ send c1 x2048
               , bench "send/recv stream 2048b" $ (send c2 x2048 >> recv a2)
+              , bench "sendU stream 16b" $ sendUnsafe c3 x16
+              , bench "sendU stream 2048b" $ sendUnsafe c3 x2048
+              , bench "sendU/recvU stream 2048b" $ (sendUnsafe c4 x2048 >> recvUnsafe a4)
               -- , bench "send dgram"  $ send c2 x16
               -- , bench "recv stream" $ recv a2
               -- , bench "recv dgram" $ recv a2

@@ -6,6 +6,8 @@ module Network.CommSec
     -- * Send and receive operations
     , send, recv
     , sendPtr, recvPtr
+    , sendUnsafe, recvUnsafe
+    , sendPtrUnsafe, recvPtrUnsafe
     -- * Establishing a connection from a shared secret
     -- ** Thread Safe
     , accept
