@@ -96,7 +96,7 @@ instance Exception CommSecError
 -- communicate with an identically initialized in context.
 newOutContext :: ByteString -> OutContext
 newOutContext bs
-    | B.length bs < 24 = error "Not enough entropy"
+    | B.length bs < 24 = error $ "Not enough entropy: " ++ show (B.length bs)
     | otherwise =
         let aesCtr  = 0
             saltOut = unsafePerformIO $ B.unsafeUseAsCString bs $ peekBE32 . castPtr
@@ -107,7 +107,7 @@ newOutContext bs
 -- communicate with an identically initialized out context.
 newInContext  :: ByteString -> InContext
 newInContext bs
-    | B.length bs < 24 = error "Not enough entropy"
+    | B.length bs < 24 = error $ "Not enough entropy: " ++ show (B.length bs)
     | otherwise =
         let base   = 0
             mask   = 0

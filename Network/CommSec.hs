@@ -90,13 +90,13 @@ recvPtrUnsafe = recvPtrWith readIORef writeIORef
 
 -- helper for send, sendUnsafe
 sendWith :: (c OutContext -> IO OutContext) -> (c OutContext -> OutContext -> IO ()) -> Connection c -> B.ByteString -> IO ()
-sendWith get put conn msg = B.useAsCStringLen msg $ \(ptPtr, ptLen) -> sendPtrWith get put conn (castPtr ptPtr) ptLen
+sendWith get put conn msg = B.useAsCStringLen msg $ \(ptPtr, ptLen) ->
+  sendPtrWith get put conn (castPtr ptPtr) ptLen
 {-# INLINE sendWith #-}
 
 data RecvRes = Good | Small | Err deriving (Eq)
 
 -- helper for recv, recvUnsafe
--- FIXME
 recvWith :: (c InContext -> IO InContext) -> (c InContext -> InContext -> IO ()) -> Connection c -> IO B.ByteString
 recvWith get put conn@(Conn {..}) = allocGo baseSize
  where
@@ -138,8 +138,9 @@ sendPtrWith get put c@(Conn {..}) ptPtr ptLen = do
     allocaBytes pktLen $ \pktPtr -> do
         let ctPtr = pktPtr `plusPtr` sizeTagLen
         pokeBE32 pktPtr (fromIntegral ctLen)
-        o <- get outCtx
-        encodePtr o ptPtr ctPtr ptLen
+        o  <- get outCtx
+        o2 <- encodePtr o ptPtr ctPtr ptLen
+        put outCtx o2
         Net.sendBuf socket pktPtr pktLen
         return ()
 
@@ -209,7 +210,7 @@ expandSecret entropy sz =
  where
   input = B.replicate sz 0
   enc :: AESKey -> B.ByteString -> B.ByteString -> B.ByteString
-  enc k i pt = B.unsafeCreate 16 $ \ctPtr ->
+  enc k i pt = B.unsafeCreate sz $ \ctPtr ->
                 B.useAsCString pt $ \ptPtr ->
                  B.useAsCString i $ \iv ->
                    encryptCTR k (castPtr iv) (castPtr ctPtr) (castPtr ptPtr) sz
@@ -225,17 +226,18 @@ doAccept  :: (forall x. x -> IO (c x)) -> B.ByteString -> PortNumber -> SocketTy
 doAccept create s p streamOrDgram
   | B.length s < 16 = error "Invalid input entropy"
   | otherwise = do
-    let ent = expandSecret s 64
-        k1  = B.take 32 ent
-        k2  = B.drop 32 ent
+    let ent   = expandSecret s 64
+        k1    = B.take 32 ent
+        k2    = B.drop 32 ent
         iCtx  = newInContext k1
-        oCtx = newOutContext k2
+        oCtx  = newOutContext k2
         sockaddr = Net.SockAddrInet p Net.iNADDR_ANY
     sock <- Net.socket Net.AF_INET streamOrDgram Net.defaultProtocol
     Net.setSocketOption sock Net.ReuseAddr 1
     Net.bind sock sockaddr
-    Net.listen sock 1
+    Net.listen sock 10
     socket <- fst `fmap` Net.accept sock
+    Net.setSocketOption socket Net.NoDelay 1
     Net.close sock
     inCtx  <- create iCtx
     outCtx <- create oCtx
@@ -253,8 +255,9 @@ doConnect create s hn p streamOrDgram
         oCtx = newOutContext k2
         sockaddr = Net.SockAddrInet p ha
     socket <- Net.socket Net.AF_INET streamOrDgram Net.defaultProtocol
-    Net.setSocketOption socket Net.ReuseAddr 1
     Net.connect socket sockaddr
+    Net.setSocketOption socket Net.NoDelay 1
+    Net.setSocketOption socket Net.ReuseAddr 1
     inCtx  <- create iCtx
     outCtx <- create oCtx
     return (Conn {..})
