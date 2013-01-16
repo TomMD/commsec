@@ -21,4 +21,4 @@ library
                        cipher-aes128 >= 0.2,
                        bytestring,
                        crypto-api,
-                       network
+                       network >= 2.5
