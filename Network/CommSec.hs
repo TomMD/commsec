@@ -2,7 +2,7 @@
 module Network.CommSec
     (
     -- * Types
-      Connection, Safe, Unsafe
+      Connection(..), Safe, Unsafe
     -- * Send and receive operations
     , send, recv
     , sendPtr, recvPtr
