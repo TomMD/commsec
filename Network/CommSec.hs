@@ -31,6 +31,7 @@ import qualified Network.Socket as Net
 import Data.IORef
 import Control.Concurrent.MVar
 import Control.Exception (throw)
+import Control.Monad
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as B
 import qualified Data.ByteString.Internal as B
@@ -54,41 +55,47 @@ data Connection c
                    , socket       :: Socket
                    }
 
+pMVar :: MVar v -> v -> IO ()
+pMVar m v = v `seq` putMVar m v
+
 send :: Connection Safe -> B.ByteString -> IO ()
-send = sendWith takeMVar putMVar
+send = sendWith takeMVar pMVar
 
 recv :: Connection Safe -> IO B.ByteString
-recv = recvWith takeMVar putMVar
+recv = recvWith takeMVar pMVar
 
 -- |Sends a message over the connection.
 sendPtr :: Connection Safe -> Ptr Word8 -> Int -> IO ()
-sendPtr = sendPtrWith takeMVar putMVar
+sendPtr = sendPtrWith takeMVar pMVar
 
 -- |Blocks till it receives a valid message, placing the resulting plaintext
 -- in the provided buffer.  If the incoming message is larger that the
 -- provided buffer then the message is truncated.  This process also incurs
 -- an additional copy.
 recvPtr :: Connection Safe -> Ptr Word8 -> Int -> IO Int
-recvPtr = recvPtrWith takeMVar putMVar
+recvPtr = recvPtrWith takeMVar pMVar
+
+wIORef :: IORef v -> v -> IO ()
+wIORef ref val = val `seq` writeIORef ref val
 
 -- |Sends a message.
 sendUnsafe :: Connection Unsafe -> B.ByteString -> IO ()
-sendUnsafe = sendWith readIORef writeIORef
+sendUnsafe = sendWith readIORef wIORef
 
 -- |Receives a message.
 recvUnsafe :: Connection Unsafe -> IO B.ByteString
-recvUnsafe = recvWith readIORef writeIORef
+recvUnsafe = recvWith readIORef wIORef
 
 -- |Sends a message.
 sendPtrUnsafe :: Connection Unsafe -> Ptr Word8 -> Int -> IO ()
-sendPtrUnsafe = sendPtrWith readIORef writeIORef
+sendPtrUnsafe = sendPtrWith readIORef wIORef
 
 -- |Blocks till it receives a valid message, placing the resulting plaintext
 -- in the provided buffer.  If the incoming message is larger that the
 -- provided buffer then the message is truncated.  This process also incurs
 -- an additional copy.
 recvPtrUnsafe :: Connection Unsafe -> Ptr Word8 -> Int -> IO Int
-recvPtrUnsafe = recvPtrWith readIORef writeIORef
+recvPtrUnsafe = recvPtrWith readIORef wIORef
 
 -- helper for send, sendUnsafe
 sendWith :: (c OutContext -> IO OutContext) -> (c OutContext -> OutContext -> IO ()) -> Connection c -> B.ByteString -> IO ()
@@ -102,7 +109,7 @@ data RecvRes = Good | Small | Err deriving (Eq)
 recvWith :: (c InContext -> IO InContext) -> (c InContext -> InContext -> IO ()) -> Connection c -> IO B.ByteString
 recvWith get put conn@(Conn {..}) = allocGo baseSize
  where
-    baseSize = 1024
+    baseSize = 2048
     allocGo :: Int -> IO B.ByteString
     allocGo n = allocaBytes sizeTagLen (go n)
 
@@ -239,7 +246,7 @@ doAccept create s p streamOrDgram
     Net.bind sock sockaddr
     Net.listen sock 10
     socket <- fst `fmap` Net.accept sock
-    Net.setSocketOption socket Net.NoDelay 1
+    when (streamOrDgram == Stream) $ Net.setSocketOption socket Net.NoDelay 1
     Net.close sock
     inCtx  <- create iCtx
     outCtx <- create oCtx
@@ -258,7 +265,7 @@ doConnect create s hn p streamOrDgram
         sockaddr = Net.SockAddrInet p ha
     socket <- Net.socket Net.AF_INET streamOrDgram Net.defaultProtocol
     Net.connect socket sockaddr
-    Net.setSocketOption socket Net.NoDelay 1
+    when (streamOrDgram == Stream) $ Net.setSocketOption socket Net.NoDelay 1
     Net.setSocketOption socket Net.ReuseAddr 1
     inCtx  <- create iCtx
     outCtx <- create oCtx
