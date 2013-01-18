@@ -57,6 +57,9 @@ import Data.Data
 import Data.Typeable
 import Control.Exception
 
+import Network.CommSec.Types
+import Network.CommSec.BitWindow
+
 gPadMax,gBlockLen,gTagLen,gCtrSize :: Int
 gPadMax   = 16
 gBlockLen = 16
@@ -76,21 +79,10 @@ data OutContext =
 
 -- | A context useful for receiving data.
 data InContext =
-    In  { base      :: {-# UNPACK #-} !Word64
-        , mask      :: {-# UNPACK #-} !Word64
+    In  { bitWindow :: {-# UNPACK #-} !BitWindow
         , saltIn    :: {-# UNPACK #-} !Word32
         , inKey     :: AESKey
         }
-
--- |Errors that can be returned by the decoding/receicing operations.
-data CommSecError
-        = OldContext    -- The context is too old (sequence number rollover)
-        | DuplicateSeq  -- The sequence number we previously seen (possible replay attack)
-        | InvalidICV    -- The integrity check value is invalid
-        | BadPadding    -- The padding was invalid (corrupt sender?)
-    deriving (Eq,Ord,Show,Enum,Data,Typeable)
-
-instance Exception CommSecError
 
 -- | Given at least 24 bytes of entropy, produce an out context that can
 -- communicate with an identically initialized in context.
@@ -109,8 +101,7 @@ newInContext  :: ByteString -> InContext
 newInContext bs
     | B.length bs < 24 = error $ "Not enough entropy: " ++ show (B.length bs)
     | otherwise =
-        let base   = 0
-            mask   = 0
+        let bitWindow = zeroWindow
             saltIn = unsafePerformIO $ B.unsafeUseAsCString bs $ peekBE32 . castPtr
             inKey  = fromMaybe (error "Could not build a key") $ buildKey $ B.drop (sizeOf saltIn) bs
         in In {..}
@@ -273,9 +264,7 @@ encodePtr ctx@(Out {..}) ptPtr pkgPtr ptLen
 -- location @msg@ and its size is returned along with a new context (or
 -- error).
 decodePtr :: InContext -> Ptr Word8 -> Ptr Word8 -> Int -> IO (Either CommSecError (Int,InContext))
-decodePtr (In {..}) pkgPtr msgPtr pkgLen
-  | base >= maxBound - 64 = return $ Left OldContext
-  | otherwise = do
+decodePtr (In {..}) pkgPtr msgPtr pkgLen = do
     cnt <- peekBE pkgPtr
     let !ctPtr  = pkgPtr `plusPtr` sizeOf cnt
         !ctLen  = pkgLen - tagLen - sizeOf cnt
@@ -286,13 +275,13 @@ decodePtr (In {..}) pkgPtr msgPtr pkgLen
     case r of
         Left err  -> return (Left err)
         Right  () -> do
-            case updateBaseMask base mask cnt of
-                Nothing -> return (Left DuplicateSeq)
-                Just (base',mask') -> do
+            case updateBitWindow bitWindow cnt of
+                Left e -> return (Left e)
+                Right newMask -> do
                     pdLen <- padLenPtr msgPtr paddedLen
                     case pdLen of
                         Nothing -> return $ Left BadPadding
-                        Just l  -> return $ Right (paddedLen - l, In base' mask' saltIn inKey)
+                        Just l  -> return $ Right (paddedLen - l, In newMask saltIn inKey)
 
 -- |Use an 'InContext' to decrypt a message, verifying the ICV and sequence
 -- number.  Unlike sending, receiving is more likely to result in an
@@ -300,24 +289,22 @@ decodePtr (In {..}) pkgPtr msgPtr pkgLen
 --
 -- Message format: [ctr, ct, padding, tag].
 decode :: InContext -> ByteString -> Either CommSecError (ByteString, InContext)
-decode (In {..}) pkg
-  | base >= maxBound - 64 = Left OldContext
-  | otherwise =
+decode (In {..}) pkg =
     let cnt    = unsafePerformIO $ B.unsafeUseAsCString pkg (peekBE . castPtr)
         cntLen = sizeOf cnt
         tagLen = gTagLen
         tag    = B.drop (B.length pkg - tagLen) pkg
         ct     = let st = (B.drop cntLen pkg) in B.take (B.length st - tagLen) st
         ptpd   = decryptGCM inKey cnt saltIn ct tag
-    in case updateBaseMask base mask cnt of
-              Nothing -> Left DuplicateSeq
-              Just (base',mask') ->
+    in case updateBitWindow bitWindow cnt of
+              Left e -> Left e
+              Right bw ->
                   case ptpd of
                       Left err    -> Left err
                       Right ptPad ->
                         case unpad ptPad of
                             Nothing -> Left BadPadding
-                            Just pt -> Right (pt, In base' mask' saltIn inKey)
+                            Just pt -> Right (pt, In bw saltIn inKey)
 
 -- |Pad a bytestring to block size
 pad :: ByteString -> ByteString
@@ -352,40 +339,6 @@ padLenPtr ptr len
     | otherwise = do
         r <- fromIntegral `fmap` (peekElemOff ptr (len-1) :: IO Word8)
         if r <= gPadMax then return (Just r) else return Nothing
-
-updateBaseMask :: Word64 -> Word64 -> Word64 -> Maybe (Word64,Word64)
-updateBaseMask !base !mask !seq
-  | base <= seq && base >= seqBase =
-      let pos = fromIntegral $ seq - base
-      in if testBit mask pos
-          then Nothing
-          else Just (base, setBit mask pos)
-#ifdef SEQ_WINDOW_JUMPS
-  -- If all packets are received iun order, you will hit this case on every
-  -- 64th packet and perform a single shiftR operation.  If packets are
-  -- received out of order then this method is more likely to incorrectly
-  -- mark packets as duplicate.
-  | base < seqBase = updateBaseMask seq (mask `shiftR` fromIntegral (seq - base)) seq
-#else
-  -- If all packets are received in order, you will theoretically hit this
-  -- case on every 64th packet, perform 64 shiftRight operations (due to lack of
-  -- a msnzb operation), and
-  -- proceed with the next 63 packets incurring only a bitSet operation.
-  | base < seqBase =
-      let newBase = seqBase
-          newMask = mask `shiftR` fromIntegral (seqBase - base)
-          shiftIt !b !m
-            | testBit m 0 = shiftIt (b+1) (shiftR m 1)
-            | otherwise   = (b,m)
-          (finalBase, finalMask) = shiftIt newBase newMask
-      in updateBaseMask finalBase finalMask seq
-#endif
-  | base > seq     = Nothing
-  where
-   !seqBase | seq < 64  = 0
-            | otherwise = seq-63
-{-# INLINE updateBaseMask #-}
-
 
 peekBE :: Ptr Word8 -> IO Word64
 peekBE p = do
