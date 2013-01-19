@@ -10,6 +10,7 @@ import Control.Monad
 import Control.Exception (throw)
 import qualified Network.Secure as S
 import OpenSSL
+import Foreign.Marshal.Alloc
 
 ctxIn :: InContext
 ctxIn  = newInContext (B.replicate 24 0)
@@ -35,7 +36,7 @@ pkg512 = fst $ encode ctxOut x512
 pkg1024 = fst $ encode ctxOut x1024
 pkg2048 = fst $ encode ctxOut x2048
 
-main = withOpenSSL $ do
+main = withOpenSSL $ allocaBytes 2048 $ \ptr -> do
   let secret = B.replicate 32 0
       port1 = 1982
       port2 = 9843
@@ -54,34 +55,27 @@ main = withOpenSSL $ do
   a0 <- wait aw0
 
 
-  aw1 <- async $ accept secret port1 Stream
+  aw1 <- async $ accept secret port1
   threadDelay 10000
-  c1 <- connect secret "127.0.0.1" port1 Stream
+  c1 <- connect secret "127.0.0.1" port1
   a1 <- wait aw1
   forkIO (forever $ recv a1)
 
-  aw2 <- async $ accept secret port2 Stream
+  aw2 <- async $ accept secret port2
   threadDelay 10000
-  c2 <- connect secret "127.0.0.1" port2 Stream
+  c2 <- connect secret "127.0.0.1" port2
   a2 <- wait aw2
 
-  aw3 <- async $ acceptUnsafe secret port3 Stream
+  aw3 <- async $ acceptUnsafe secret port3
   threadDelay 10000
-  c3 <- connectUnsafe secret "127.0.0.1" port3 Stream
+  c3 <- connectUnsafe secret "127.0.0.1" port3
   a3 <- wait aw3
   forkIO (forever $ recvUnsafe a3)
 
-  aw4 <- async $ acceptUnsafe secret port4 Stream
+  aw4 <- async $ acceptUnsafe secret port4
   threadDelay 10000
-  c4 <- connectUnsafe secret "127.0.0.1" port4 Stream
+  c4 <- connectUnsafe secret "127.0.0.1" port4
   a4 <- wait aw4
-
-  c5 <- connectUnsafe secret "127.0.0.1" port5 Datagram
-  a5 <- connectUnsafe secret "127.0.0.1" port5 Datagram
-  forkIO (forever $ recvUnsafe a5)
-
-  c6 <- connectUnsafe secret "127.0.0.1" port6 Datagram
-  a6 <- connectUnsafe secret "127.0.0.1" port6 Datagram
 
   defaultMain [ bench "encode 16b" $   nf (fst . encode ctxOut) x16
               , bench "encode 32b" $   nf (fst . encode ctxOut) x32
@@ -101,18 +95,10 @@ main = withOpenSSL $ do
               , bench "decode 2048b" $ nf (either throw fst . decode ctxIn) pkg2048
               , bench "send stream 16b" $ send c1 x16
               , bench "send stream 2048b" $ send c1 x2048
+              , bench "send/recv stream 16b (ptr)" $ (sendPtr c2 ptr 16 >> recvPtr a2 ptr 2048)
               , bench "send/recv stream 16b" $ (send c2 x16 >> recv a2)
               , bench "secure-sockets 16b" $ (S.write c0 x16 >> S.read a0 16)
+              , bench "send/recv stream 2048b (ptr)" $ (sendPtr c2 ptr 2048 >> recvPtr a2 ptr 2048)
               , bench "send/recv stream 2048b" $ (send c2 x2048 >> recv a2)
               , bench "secure-sockets 2048b" $ (S.write c0 x2048 >> S.read a0 2048)
-              -- , bench "sendU stream 16b" $ sendUnsafe c3 x16
-              -- , bench "sendU stream 2048b" $ sendUnsafe c3 x2048
-              -- , bench "sendU/recvU stream 2048b" $ (sendUnsafe c4 x2048 >> recvUnsafe a4)
-
-              -- , bench "sendU dgram 16b" $ sendUnsafe c5 x16
-              -- , bench "sendU dgram 2048b" $ sendUnsafe c5 x2048
-              -- , bench "sendU/recvU dgram 2048b" $ (sendUnsafe c6 x2048 >> recvUnsafe a6)
-              -- , bench "send dgram"  $ send c2 x16
-              -- , bench "recv stream" $ recv a2
-              -- , bench "recv dgram" $ recv a2
               ]
