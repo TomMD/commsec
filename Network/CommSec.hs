@@ -22,7 +22,6 @@ import Network.Socket ( Socket, SocketType(..), SockAddr, AddrInfo(..)
                       , defaultHints , getAddrInfo, sendBuf, addrAddress
                       , recvBuf, HostName, PortNumber)
 import qualified Network.Socket as Net
-import Data.IORef
 import Control.Concurrent.MVar
 import Control.Exception (throw)
 import Control.Monad
@@ -60,9 +59,6 @@ sendPtr = sendPtrWith takeMVar pMVar
 -- an additional copy.
 recvPtr :: Connection -> Ptr Word8 -> Int -> IO Int
 recvPtr = recvPtrWith takeMVar pMVar
-
-wIORef :: IORef v -> v -> IO ()
-wIORef ref val = val `seq` writeIORef ref val
 
 -- helper for send
 sendWith :: (c OutContext -> IO OutContext) -> (c OutContext -> OutContext -> IO ()) -> Connection c -> B.ByteString -> IO ()
