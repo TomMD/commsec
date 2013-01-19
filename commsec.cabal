@@ -21,8 +21,8 @@ build-type:          Simple
 cabal-version:       >=1.8
 
 library
-  exposed-modules:     Network.CommSec, Network.CommSec.Package
-  other-modules:       Network.CommSec.BitWindow, Network.CommSec.Types
+  exposed-modules:     Network.CommSec, Network.CommSec.Package, Network.CommSec.BitWindow, Network.CommSec.Types
+  -- other-modules:       Network.CommSec.BitWindow, Network.CommSec.Types
   build-depends:       base >4.5 && < 5,
                        cipher-aes128 >= 0.2,
                        bytestring,
