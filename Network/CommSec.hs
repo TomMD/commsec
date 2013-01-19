@@ -121,7 +121,7 @@ recvWith get put conn@(Conn {..}) = allocGo baseSize
       | otherwise = do
           recvBytesPtr socket tmpPtr sizeTagLen
           sz <- fromIntegral `fmap` peekBE32 tmpPtr
-          (b,res) <- B.createAndTrim' sz $ \ptPtr -> do
+          (b, res) <- B.createAndTrim' sz $ \ptPtr -> do
             resSz <- recvPtrOfSz get put conn ptPtr sz
             case resSz of
                 Left err -> if err `elem` retryOn then return (0,0,Err)
@@ -150,7 +150,7 @@ sendPtrWith get put c@(Conn {..}) ptPtr ptLen = do
         o  <- get outCtx
         o2 <- encodePtr o ptPtr ctPtr ptLen
         put outCtx o2
-        Net.sendBuf socket pktPtr pktLen
+        sendBytesPtr socket pktPtr pktLen
         return ()
 
 -- helper for recvPtr, recvPtrUnsafe
@@ -298,4 +298,5 @@ connectUnsafe :: B.ByteString
 connectUnsafe = doConnect newIORef
 
 -- |We use a word32 to indicate the size of a datagram
+sizeTagLen :: Int
 sizeTagLen = 4

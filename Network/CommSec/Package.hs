@@ -335,7 +335,7 @@ unpad bs
 -- Perhaps this should be called 'unpadPtr'
 padLenPtr :: Ptr Word8 -> Int -> IO (Maybe Int)
 padLenPtr ptr len
-    | len <= gPadMax = return Nothing
+    | len < gPadMax = return Nothing
     | otherwise = do
         r <- fromIntegral `fmap` (peekElemOff ptr (len-1) :: IO Word8)
         if r <= gPadMax then return (Just r) else return Nothing
