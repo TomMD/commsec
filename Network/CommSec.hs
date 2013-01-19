@@ -24,7 +24,9 @@ import Crypto.Classes (buildKey)
 import Crypto.Cipher.AES128.Internal (encryptCTR)
 import Crypto.Cipher.AES128 (AESKey)
 import Network.CommSec.Package
-import Network.Socket (Socket, sendBuf, recvBuf, HostName, PortNumber)
+import Network.Socket ( Socket, SocketType(..), SockAddr, AddrInfo(..)
+                      , defaultHints , getAddrInfo, sendBuf, addrAddress
+                      , recvBuf, HostName, PortNumber)
 import qualified Network.Socket as Net
 import Data.IORef
 import Control.Concurrent.MVar
@@ -36,7 +38,7 @@ import qualified Data.ByteString.Internal as B
 import Foreign.Ptr
 import Foreign.Marshal.Alloc
 import Data.Word
-
+import Data.Maybe (listToMaybe)
 -- | Unsafe connections are not thread safe.  Concurrent use can compromise
 -- security.
 type Unsafe = IORef
@@ -239,7 +241,7 @@ doAccept create s p
         iCtx  = newInContext k1
         oCtx  = newOutContext k2
         sockaddr = Net.SockAddrInet p Net.iNADDR_ANY
-    sock <- Net.socket Net.AF_INET Net.defaultProtocol
+    sock <- Net.socket Net.AF_INET Net.Stream Net.defaultProtocol
     Net.setSocketOption sock Net.ReuseAddr 1
     Net.bind sock sockaddr
     Net.listen sock 10
@@ -254,20 +256,24 @@ doConnect  :: (forall x. x -> IO (c x)) -> B.ByteString -> HostName -> PortNumbe
 doConnect create s hn p
   | B.length s < 16 = error "Invalid input entropy"
   | otherwise = do
-    ha <- Net.inet_addr hn
+    sockaddr <- resolve hn p
     let ent  = expandSecret s 64
         k2   = B.take 32 ent
         k1   = B.drop 32 ent
         iCtx = newInContext k1
         oCtx = newOutContext k2
-        sockaddr = Net.SockAddrInet p ha
-    socket <- Net.socket Net.AF_INET Net.defaultProtocol
+    socket <- Net.socket Net.AF_INET Net.Stream Net.defaultProtocol
     Net.connect socket sockaddr
     Net.setSocketOption socket Net.NoDelay 1
     Net.setSocketOption socket Net.ReuseAddr 1
     inCtx  <- create iCtx
     outCtx <- create oCtx
     return (Conn {..})
+  where
+      resolve :: HostName -> PortNumber -> IO SockAddr
+      resolve h port = do
+        ai <- getAddrInfo (Just $ defaultHints { addrFamily = Net.AF_INET, addrSocketType = Stream } ) (Just h) (Just (show port))
+        return (maybe (error $ "Could not resolve host " ++ h) addrAddress (listToMaybe ai))
 
 -- |Expands the provided 128 (or more) bit secret into two
 -- keys to create a connection.

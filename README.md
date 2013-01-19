@@ -45,8 +45,6 @@ as an exception.  Sending message (Network.CommSec.send) can also throw 'OldCont
 
 ##TODO
 
- * Factor out a 'BitWindow' type.  Make quickchecks
- * Fix HostName resolution
  * Make a commsec-pki or commsec-sshkey package that performs authentication, key agreement, and maybe exception handling/rekey.
 
 ##Performance
@@ -78,7 +76,7 @@ Currently the performance of comm-sec is all about the AESgcm routine, which is 
 </table>
 
 ##Related Tools
-To obtain ephemeral keys, you might want to use your systems IKE
+To obtain ephemeral keys you might want to use your systems IKE
 daemon, a diffe-helman computation with authentication, or perhaps an
 MQV using Haskell's hecc package.
 

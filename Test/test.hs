@@ -39,7 +39,7 @@ prop_bitwindow_rejects_dup bw cs =
             rs      = map (updateBitWindow bwFinal) cs
         in all isLeft rs
 
-prop_send_recv_valid cIn cOut bs = (B.length bs /= 0) ==> monadicIO t
+prop_send_recv_valid cIn cOut bs = monadicIO t
   where t = do
         run $ send cOut bs
         bs' <- run $ recv cIn
@@ -84,7 +84,7 @@ runTests :: Connection Safe -> Connection Safe -> IO ()
 runTests i o = mapM_ runTest (tests i o)
 
 main = do
-    iW <- async $ accept entropy 3245 Stream
-    o <- connect entropy "127.0.0.1" 3245 Stream
+    iW <- async $ accept entropy 3245
+    o <- connect entropy "127.0.0.1" 3245
     i <- wait iW
     runTests i o
