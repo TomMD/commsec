@@ -2,19 +2,13 @@
 module Network.CommSec
     (
     -- * Types
-      Connection(..), Safe, Unsafe
+      Connection(..)
     -- * Send and receive operations
     , send, recv
     , sendPtr, recvPtr
-    , sendUnsafe, recvUnsafe
-    , sendPtrUnsafe, recvPtrUnsafe
     -- * Establishing a connection from a shared secret
-    -- ** Thread Safe
     , accept
     , connect
-    -- ** Non-threadsafe
-    , acceptUnsafe
-    , connectUnsafe
     -- * Establishing a connection from a public identity (PKI)
     -- , acceptId
     -- , connectId
@@ -39,17 +33,9 @@ import Foreign.Ptr
 import Foreign.Marshal.Alloc
 import Data.Word
 import Data.Maybe (listToMaybe)
--- | Unsafe connections are not thread safe.  Concurrent use can compromise
--- security.
-type Unsafe = IORef
-
--- | Safe connections are more expensive due to the use of an 'MVar' but,
--- unlike their 'Unsafe' counterparts, Safe connections can be used
--- concurrently.
-type Safe   = MVar
 
 -- | A connection is a secure bidirectional communication channel.
-data Connection c
+data Connection
             = Conn { inCtx        :: c InContext
                    , outCtx       :: c OutContext
                    , socket       :: Socket
@@ -58,46 +44,27 @@ data Connection c
 pMVar :: MVar v -> v -> IO ()
 pMVar m v = v `seq` putMVar m v
 
-send :: Connection Safe -> B.ByteString -> IO ()
+send :: Connection -> B.ByteString -> IO ()
 send = sendWith takeMVar pMVar
 
-recv :: Connection Safe -> IO B.ByteString
+recv :: Connection -> IO B.ByteString
 recv = recvWith takeMVar pMVar
 
 -- |Sends a message over the connection.
-sendPtr :: Connection Safe -> Ptr Word8 -> Int -> IO ()
+sendPtr :: Connection -> Ptr Word8 -> Int -> IO ()
 sendPtr = sendPtrWith takeMVar pMVar
 
 -- |Blocks till it receives a valid message, placing the resulting plaintext
 -- in the provided buffer.  If the incoming message is larger that the
 -- provided buffer then the message is truncated.  This process also incurs
 -- an additional copy.
-recvPtr :: Connection Safe -> Ptr Word8 -> Int -> IO Int
+recvPtr :: Connection -> Ptr Word8 -> Int -> IO Int
 recvPtr = recvPtrWith takeMVar pMVar
 
 wIORef :: IORef v -> v -> IO ()
 wIORef ref val = val `seq` writeIORef ref val
 
--- |Sends a message.
-sendUnsafe :: Connection Unsafe -> B.ByteString -> IO ()
-sendUnsafe = sendWith readIORef wIORef
-
--- |Receives a message.
-recvUnsafe :: Connection Unsafe -> IO B.ByteString
-recvUnsafe = recvWith readIORef wIORef
-
--- |Sends a message.
-sendPtrUnsafe :: Connection Unsafe -> Ptr Word8 -> Int -> IO ()
-sendPtrUnsafe = sendPtrWith readIORef wIORef
-
--- |Blocks till it receives a valid message, placing the resulting plaintext
--- in the provided buffer.  If the incoming message is larger that the
--- provided buffer then the message is truncated.  This process also incurs
--- an additional copy.
-recvPtrUnsafe :: Connection Unsafe -> Ptr Word8 -> Int -> IO Int
-recvPtrUnsafe = recvPtrWith readIORef wIORef
-
--- helper for send, sendUnsafe
+-- helper for send
 sendWith :: (c OutContext -> IO OutContext) -> (c OutContext -> OutContext -> IO ()) -> Connection c -> B.ByteString -> IO ()
 sendWith get put conn msg = B.useAsCStringLen msg $ \(ptPtr, ptLen) ->
   sendPtrWith get put conn (castPtr ptPtr) ptLen
@@ -105,7 +72,7 @@ sendWith get put conn msg = B.useAsCStringLen msg $ \(ptPtr, ptLen) ->
 
 data RecvRes = Good | Small | Err deriving (Eq)
 
--- helper for recv, recvUnsafe
+-- helper for recv
 recvWith :: (c InContext -> IO InContext) -> (c InContext -> InContext -> IO ()) -> Connection c -> IO B.ByteString
 recvWith get put conn@(Conn {..}) = allocGo baseSize
  where
@@ -139,7 +106,7 @@ recvWith get put conn@(Conn {..}) = allocGo baseSize
 retryOn :: [CommSecError]
 retryOn = [DuplicateSeq, InvalidICV, BadPadding]
 
--- helper for sendPtr, sendPtrUnsafe
+-- helper for sendPtr
 sendPtrWith :: (c OutContext -> IO OutContext) -> (c OutContext -> OutContext -> IO ()) -> Connection c -> Ptr Word8 -> Int -> IO ()
 sendPtrWith get put c@(Conn {..}) ptPtr ptLen = do
     let ctLen  = encBytes ptLen
@@ -153,7 +120,7 @@ sendPtrWith get put c@(Conn {..}) ptPtr ptLen = do
         sendBytesPtr socket pktPtr pktLen
         return ()
 
--- helper for recvPtr, recvPtrUnsafe
+-- helper for recvPtr
 recvPtrWith :: (c InContext -> IO InContext) -> (c InContext -> InContext -> IO ()) -> Connection c -> Ptr Word8 -> Int -> IO Int
 recvPtrWith get put c@(Conn{..}) ptPtr maxLen = do
     r <- go
@@ -228,7 +195,7 @@ expandSecret entropy sz =
 -- keys to create a connection.
 --
 -- ex: accept ent 3134
-accept  :: B.ByteString -> PortNumber -> IO (Connection Safe)
+accept  :: B.ByteString -> PortNumber -> IO Connection
 accept = doAccept newMVar
 
 doAccept  :: (forall x. x -> IO (c x)) -> B.ByteString -> PortNumber -> IO (Connection c)
@@ -280,23 +247,8 @@ doConnect create s hn p
 connect :: B.ByteString
         -> HostName
         -> PortNumber
-        -> IO (Connection Safe)
+        -> IO Connection
 connect = doConnect newMVar
-
--- |Expands the provided 128 (or more) bit secret into two
--- keys to create a connection.
-acceptUnsafe :: B.ByteString
-             -> PortNumber
-             -> IO (Connection Unsafe)
-acceptUnsafe = doAccept newIORef
-
--- |Expands the provided 128 (or more) bit secret into two
--- keys to create a connection.
-connectUnsafe :: B.ByteString
-              -> HostName
-              -> PortNumber
-              -> IO (Connection Unsafe)
-connectUnsafe = doConnect newIORef
 
 -- |We use a word32 to indicate the size of a datagram
 sizeTagLen :: Int
