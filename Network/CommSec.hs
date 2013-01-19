@@ -18,15 +18,13 @@ module Network.CommSec
     -- * Establishing a connection from a public identity (PKI)
     -- , acceptId
     -- , connectId
-    -- * Re-exports
-    , SocketType(..)
     ) where
 
 import Crypto.Classes (buildKey)
 import Crypto.Cipher.AES128.Internal (encryptCTR)
 import Crypto.Cipher.AES128 (AESKey)
 import Network.CommSec.Package
-import Network.Socket (Socket, SocketType(..), sendBuf, recvBuf, HostName, PortNumber)
+import Network.Socket (Socket, sendBuf, recvBuf, HostName, PortNumber)
 import qualified Network.Socket as Net
 import Data.IORef
 import Control.Concurrent.MVar
@@ -227,12 +225,12 @@ expandSecret entropy sz =
 -- |Expands the provided 128 (or more) bit secret into two
 -- keys to create a connection.
 --
--- ex: accept ent me.com 3134 Stream
-accept  :: B.ByteString -> PortNumber -> SocketType -> IO (Connection Safe)
+-- ex: accept ent 3134
+accept  :: B.ByteString -> PortNumber -> IO (Connection Safe)
 accept = doAccept newMVar
 
-doAccept  :: (forall x. x -> IO (c x)) -> B.ByteString -> PortNumber -> SocketType -> IO (Connection c)
-doAccept create s p streamOrDgram
+doAccept  :: (forall x. x -> IO (c x)) -> B.ByteString -> PortNumber -> IO (Connection c)
+doAccept create s p
   | B.length s < 16 = error "Invalid input entropy"
   | otherwise = do
     let ent   = expandSecret s 64
@@ -241,19 +239,19 @@ doAccept create s p streamOrDgram
         iCtx  = newInContext k1
         oCtx  = newOutContext k2
         sockaddr = Net.SockAddrInet p Net.iNADDR_ANY
-    sock <- Net.socket Net.AF_INET streamOrDgram Net.defaultProtocol
+    sock <- Net.socket Net.AF_INET Net.defaultProtocol
     Net.setSocketOption sock Net.ReuseAddr 1
     Net.bind sock sockaddr
     Net.listen sock 10
     socket <- fst `fmap` Net.accept sock
-    when (streamOrDgram == Stream) $ Net.setSocketOption socket Net.NoDelay 1
+    Net.setSocketOption socket Net.NoDelay 1
     Net.close sock
     inCtx  <- create iCtx
     outCtx <- create oCtx
     return (Conn {..})
 
-doConnect  :: (forall x. x -> IO (c x)) -> B.ByteString -> HostName -> PortNumber -> SocketType -> IO (Connection c)
-doConnect create s hn p streamOrDgram
+doConnect  :: (forall x. x -> IO (c x)) -> B.ByteString -> HostName -> PortNumber -> IO (Connection c)
+doConnect create s hn p
   | B.length s < 16 = error "Invalid input entropy"
   | otherwise = do
     ha <- Net.inet_addr hn
@@ -263,9 +261,9 @@ doConnect create s hn p streamOrDgram
         iCtx = newInContext k1
         oCtx = newOutContext k2
         sockaddr = Net.SockAddrInet p ha
-    socket <- Net.socket Net.AF_INET streamOrDgram Net.defaultProtocol
+    socket <- Net.socket Net.AF_INET Net.defaultProtocol
     Net.connect socket sockaddr
-    when (streamOrDgram == Stream) $ Net.setSocketOption socket Net.NoDelay 1
+    Net.setSocketOption socket Net.NoDelay 1
     Net.setSocketOption socket Net.ReuseAddr 1
     inCtx  <- create iCtx
     outCtx <- create oCtx
@@ -276,7 +274,6 @@ doConnect create s hn p streamOrDgram
 connect :: B.ByteString
         -> HostName
         -> PortNumber
-        -> SocketType
         -> IO (Connection Safe)
 connect = doConnect newMVar
 
@@ -284,7 +281,6 @@ connect = doConnect newMVar
 -- keys to create a connection.
 acceptUnsafe :: B.ByteString
              -> PortNumber
-             -> SocketType
              -> IO (Connection Unsafe)
 acceptUnsafe = doAccept newIORef
 
@@ -293,7 +289,6 @@ acceptUnsafe = doAccept newIORef
 connectUnsafe :: B.ByteString
               -> HostName
               -> PortNumber
-              -> SocketType
               -> IO (Connection Unsafe)
 connectUnsafe = doConnect newIORef
 
