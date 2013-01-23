@@ -36,8 +36,8 @@ import Data.Maybe (listToMaybe)
 
 -- | A connection is a secure bidirectional communication channel.
 data Connection
-            = Conn { inCtx        :: c InContext
-                   , outCtx       :: c OutContext
+            = Conn { inCtx        :: MVar InContext
+                   , outCtx       :: MVar OutContext
                    , socket       :: Socket
                    }
 
@@ -62,7 +62,7 @@ recvPtr :: Connection -> Ptr Word8 -> Int -> IO Int
 recvPtr = recvPtrWith takeMVar pMVar
 
 -- helper for send
-sendWith :: (c OutContext -> IO OutContext) -> (c OutContext -> OutContext -> IO ()) -> Connection -> B.ByteString -> IO ()
+sendWith :: (MVar OutContext -> IO OutContext) -> (MVar OutContext -> OutContext -> IO ()) -> Connection -> B.ByteString -> IO ()
 sendWith get put conn msg = B.useAsCStringLen msg $ \(ptPtr, ptLen) ->
   sendPtrWith get put conn (castPtr ptPtr) ptLen
 {-# INLINE sendWith #-}
@@ -70,7 +70,7 @@ sendWith get put conn msg = B.useAsCStringLen msg $ \(ptPtr, ptLen) ->
 data RecvRes = Good | Small | Err deriving (Eq)
 
 -- helper for recv
-recvWith :: (c InContext -> IO InContext) -> (c InContext -> InContext -> IO ()) -> Connection -> IO B.ByteString
+recvWith :: (MVar InContext -> IO InContext) -> (MVar InContext -> InContext -> IO ()) -> Connection -> IO B.ByteString
 recvWith get put conn@(Conn {..}) = allocGo baseSize
  where
     baseSize = 2048
@@ -104,7 +104,7 @@ retryOn :: [CommSecError]
 retryOn = [DuplicateSeq, InvalidICV, BadPadding]
 
 -- helper for sendPtr
-sendPtrWith :: (c OutContext -> IO OutContext) -> (c OutContext -> OutContext -> IO ()) -> Connection -> Ptr Word8 -> Int -> IO ()
+sendPtrWith :: (MVar OutContext -> IO OutContext) -> (MVar OutContext -> OutContext -> IO ()) -> Connection -> Ptr Word8 -> Int -> IO ()
 sendPtrWith get put c@(Conn {..}) ptPtr ptLen = do
     let ctLen  = encBytes ptLen
         pktLen = sizeTagLen + ctLen
@@ -118,7 +118,7 @@ sendPtrWith get put c@(Conn {..}) ptPtr ptLen = do
         return ()
 
 -- helper for recvPtr
-recvPtrWith :: (c InContext -> IO InContext) -> (c InContext -> InContext -> IO ()) -> Connection -> Ptr Word8 -> Int -> IO Int
+recvPtrWith :: (MVar InContext -> IO InContext) -> (MVar InContext -> InContext -> IO ()) -> Connection -> Ptr Word8 -> Int -> IO Int
 recvPtrWith get put c@(Conn{..}) ptPtr maxLen = do
     r <- go
     case r of
@@ -147,7 +147,7 @@ recvPtrWith get put c@(Conn{..}) ptPtr maxLen = do
           else finish ptPtr
 
 -- Receive sz bytes and decode it into ptPtr, helper for recvWith
-recvPtrOfSz :: (c InContext -> IO InContext) -> (c InContext -> InContext -> IO ()) -> Connection -> Ptr Word8 -> Int -> IO (Either CommSecError Int)
+recvPtrOfSz :: (MVar InContext -> IO InContext) -> (MVar InContext -> InContext -> IO ()) -> Connection -> Ptr Word8 -> Int -> IO (Either CommSecError Int)
 recvPtrOfSz get put (Conn {..}) ptPtr sz =
     allocaBytes sz $ \ct -> do
         recvBytesPtr socket ct sz
@@ -195,7 +195,7 @@ expandSecret entropy sz =
 accept  :: B.ByteString -> PortNumber -> IO Connection
 accept = doAccept newMVar
 
-doAccept  :: (forall x. x -> IO (c x)) -> B.ByteString -> PortNumber -> IO Connection
+doAccept  :: (forall x. x -> IO (MVar x)) -> B.ByteString -> PortNumber -> IO Connection
 doAccept create s p
   | B.length s < 16 = error "Invalid input entropy"
   | otherwise = do
@@ -216,7 +216,7 @@ doAccept create s p
     outCtx <- create oCtx
     return (Conn {..})
 
-doConnect  :: (forall x. x -> IO (c x)) -> B.ByteString -> HostName -> PortNumber -> IO Connection
+doConnect  :: (forall x. x -> IO (MVar x)) -> B.ByteString -> HostName -> PortNumber -> IO Connection
 doConnect create s hn p
   | B.length s < 16 = error "Invalid input entropy"
   | otherwise = do
