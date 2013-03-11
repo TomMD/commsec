@@ -161,7 +161,7 @@ recvPtrOfSz get put (Conn {..}) ptPtr sz =
 recvBytesPtr :: Socket -> Ptr Word8 -> Int -> IO ()
 recvBytesPtr s p 0 = return ()
 recvBytesPtr s p l = do
-        nr <- recvBuf s l p
+        nr <- recvBuf s p l
         recvBytesPtr s (p `plusPtr` nr) (l - nr)
 
 -- Retry until we have sent exactly the specified number of bytes
