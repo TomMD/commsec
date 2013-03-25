@@ -19,6 +19,7 @@ import Crypto.Classes (buildKey)
 import Crypto.Cipher.AES128.Internal (encryptCTR)
 import Crypto.Cipher.AES128 (AESKey)
 import Network.CommSec.Package
+import Network.CommSec.Types
 import Network.Socket ( Socket, SocketType(..), SockAddr, AddrInfo(..)
                       , defaultHints , getAddrInfo, sendBuf, addrAddress
                       , recvBuf, HostName, PortNumber)
@@ -202,7 +203,7 @@ doAccept create s p
     let ent   = expandSecret s 64
         k1    = B.take 32 ent
         k2    = B.drop 32 ent
-        iCtx  = newInContext k1
+        iCtx  = newInContext k1 Sequential
         oCtx  = newOutContext k2
         sockaddr = Net.SockAddrInet p Net.iNADDR_ANY
     sock <- Net.socket Net.AF_INET Net.Stream Net.defaultProtocol
@@ -224,7 +225,7 @@ doConnect create s hn p
     let ent  = expandSecret s 64
         k2   = B.take 32 ent
         k1   = B.drop 32 ent
-        iCtx = newInContext k1
+        iCtx = newInContext k1 Sequential
         oCtx = newOutContext k2
     socket <- Net.socket Net.AF_INET Net.Stream Net.defaultProtocol
     Net.connect socket sockaddr

@@ -11,6 +11,7 @@ module Network.CommSec.Package
       OutContext(..)
     , InContext(..)
     , CommSecError(..)
+    , SequenceMode(..)
     -- , Secret, Socket
       -- * Build contexts for use sending and receiving
     , newInContext, newOutContext -- , newSecret
@@ -78,11 +79,22 @@ data OutContext =
         }
 
 -- | A context useful for receiving data.
-data InContext =
-    In  { bitWindow :: {-# UNPACK #-} !BitWindow
+data InContext
+    = In  { bitWindow :: {-# UNPACK #-} !BitWindow
         , saltIn    :: {-# UNPACK #-} !Word32
         , inKey     :: AESKey
         }
+    | InStrict
+        { seqVal    :: {-# UNPACK #-} !Word64
+        , saltIn    :: {-# UNPACK #-} !Word32
+        , inKey     :: AESKey
+        }
+    | InSequential
+        { seqVal    :: {-# UNPACK #-} !Word64
+        , saltIn    :: {-# UNPACK #-} !Word32
+        , inKey     :: AESKey
+        }
+
 
 -- | Given at least 24 bytes of entropy, produce an out context that can
 -- communicate with an identically initialized in context.
@@ -90,21 +102,25 @@ newOutContext :: ByteString -> OutContext
 newOutContext bs
     | B.length bs < 24 = error $ "Not enough entropy: " ++ show (B.length bs)
     | otherwise =
-        let aesCtr  = 0
+        let aesCtr  = 1
             saltOut = unsafePerformIO $ B.unsafeUseAsCString bs $ peekBE32 . castPtr
             outKey  = fromMaybe (error "Could not build a key") $ buildKey $ B.drop (sizeOf saltOut) bs
         in Out {..}
 
 -- | Given at least 24 bytes of entropy, produce an in context that can
 -- communicate with an identically initialized out context.
-newInContext  :: ByteString -> InContext
-newInContext bs
+newInContext  :: ByteString -> SequenceMode -> InContext
+newInContext bs md
     | B.length bs < 24 = error $ "Not enough entropy: " ++ show (B.length bs)
     | otherwise =
         let bitWindow = zeroWindow
+            seqVal = 0
             saltIn = unsafePerformIO $ B.unsafeUseAsCString bs $ peekBE32 . castPtr
             inKey  = fromMaybe (error "Could not build a key") $ buildKey $ B.drop (sizeOf saltIn) bs
-        in In {..}
+        in case md of
+               AllowOutOfOrder -> In {..}
+               StrictOrdering  -> InStrict {..}
+               Sequential -> InSequential {..}
 
 -- Encrypts multiple-of-block-sized input, returing a bytestring of the
 -- [ctr, ct, tag].
@@ -264,24 +280,44 @@ encodePtr ctx@(Out {..}) ptPtr pkgPtr ptLen
 -- location @msg@ and its size is returned along with a new context (or
 -- error).
 decodePtr :: InContext -> Ptr Word8 -> Ptr Word8 -> Int -> IO (Either CommSecError (Int,InContext))
-decodePtr (In {..}) pkgPtr msgPtr pkgLen = do
+decodePtr ctx pkgPtr msgPtr pkgLen = do
     cnt <- peekBE pkgPtr
     let !ctPtr  = pkgPtr `plusPtr` sizeOf cnt
         !ctLen  = pkgLen - tagLen - sizeOf cnt
         !tagPtr = pkgPtr `plusPtr` (pkgLen - tagLen)
         tagLen  = gTagLen
         paddedLen = ctLen
-    r <- decryptGCMPtr inKey cnt saltIn ctPtr ctLen tagPtr tagLen msgPtr
+    r <- decryptGCMPtr (inKey ctx) cnt (saltIn ctx) ctPtr ctLen tagPtr tagLen msgPtr
     case r of
-        Left err  -> return (Left err)
-        Right  () -> do
-            case updateBitWindow bitWindow cnt of
-                Left e -> return (Left e)
-                Right newMask -> do
-                    pdLen <- padLenPtr msgPtr paddedLen
-                    case pdLen of
-                        Nothing -> return $ Left BadPadding
-                        Just l  -> return $ Right (paddedLen - l, In newMask saltIn inKey)
+        Left err -> return (Left err)
+        Right () -> helper ctx cnt paddedLen
+  where
+    {-# INLINE helper #-}
+    helper :: InContext -> Word64 -> Int
+                   -> IO (Either CommSecError (Int,InContext))
+    helper (InStrict {..}) cnt paddedLen
+        | cnt > seqVal = do
+                        pdLen <- padLenPtr msgPtr paddedLen
+                        case pdLen of
+                            Nothing -> return $ Left BadPadding
+                            Just l  -> return $ Right (paddedLen - l, InStrict cnt saltIn inKey)
+        | otherwise = return (Left DuplicateSeq)
+    helper (InSequential {..}) cnt paddedLen
+        | cnt == seqVal + 1 = do
+                        pdLen <- padLenPtr msgPtr paddedLen
+                        case pdLen of
+                            Nothing -> return $ Left BadPadding
+                            Just l  -> return $ Right (paddedLen - l, InSequential cnt saltIn inKey)
+        | otherwise = return (Left DuplicateSeq)
+
+    helper (In {..}) cnt paddedLen = do
+        case updateBitWindow bitWindow cnt of
+            Left e -> return (Left e)
+            Right newMask -> do
+                pdLen <- padLenPtr msgPtr paddedLen
+                case pdLen of
+                    Nothing -> return $ Left BadPadding
+                    Just l  -> return $ Right (paddedLen - l, In newMask saltIn inKey)
 
 -- |Use an 'InContext' to decrypt a message, verifying the ICV and sequence
 -- number.  Unlike sending, receiving is more likely to result in an
@@ -289,22 +325,44 @@ decodePtr (In {..}) pkgPtr msgPtr pkgLen = do
 --
 -- Message format: [ctr, ct, padding, tag].
 decode :: InContext -> ByteString -> Either CommSecError (ByteString, InContext)
-decode (In {..}) pkg =
+decode ctx pkg =
     let cnt    = unsafePerformIO $ B.unsafeUseAsCString pkg (peekBE . castPtr)
         cntLen = sizeOf cnt
         tagLen = gTagLen
         tag    = B.drop (B.length pkg - tagLen) pkg
         ct     = let st = (B.drop cntLen pkg) in B.take (B.length st - tagLen) st
-        ptpd   = decryptGCM inKey cnt saltIn ct tag
-    in case updateBitWindow bitWindow cnt of
-              Left e -> Left e
-              Right bw ->
-                  case ptpd of
-                      Left err    -> Left err
-                      Right ptPad ->
-                        case unpad ptPad of
-                            Nothing -> Left BadPadding
-                            Just pt -> Right (pt, In bw saltIn inKey)
+        ptpd   = decryptGCM (inKey ctx) cnt (saltIn ctx) ct tag
+    in helper ctx cnt ptpd
+  where
+    {-# INLINE helper #-}
+    helper (In {..}) cnt ptpd =
+       case updateBitWindow bitWindow cnt of
+            Left e -> Left e
+            Right bw ->
+                case ptpd of
+                    Left err    -> Left err
+                    Right ptPad ->
+                      case unpad ptPad of
+                          Nothing -> Left BadPadding
+                          Just pt -> Right (pt, In bw saltIn inKey)
+    helper (InStrict {..}) cnt ptpd
+        | cnt > seqVal =
+                case ptpd of
+                    Left err    -> Left err
+                    Right ptPad ->
+                      case unpad ptPad of
+                          Nothing -> Left BadPadding
+                          Just pt -> Right (pt, InStrict cnt saltIn inKey)
+        | otherwise = Left DuplicateSeq
+    helper (InSequential {..}) cnt ptpd
+        | cnt == seqVal + 1 =
+                case ptpd of
+                    Left err    -> Left err
+                    Right ptPad ->
+                      case unpad ptPad of
+                          Nothing -> Left BadPadding
+                          Just pt -> Right (pt, InSequential cnt saltIn inKey)
+        | otherwise = Left DuplicateSeq
 
 -- |Pad a bytestring to block size
 pad :: ByteString -> ByteString

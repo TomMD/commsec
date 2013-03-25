@@ -13,7 +13,7 @@ import OpenSSL
 import Foreign.Marshal.Alloc
 
 ctxIn :: InContext
-ctxIn  = newInContext (B.replicate 24 0)
+ctxIn  = newInContext (B.replicate 24 0) Sequential
 
 ctxOut :: OutContext
 ctxOut = newOutContext (B.replicate 24 0)
@@ -54,7 +54,6 @@ main = withOpenSSL $ allocaBytes 2048 $ \ptr -> do
   c0 <- S.connect me [you] ("localhost", "4242")
   a0 <- wait aw0
 
-
   aw1 <- async $ accept secret port1
   threadDelay 10000
   c1 <- connect secret "127.0.0.1" port1
@@ -66,16 +65,6 @@ main = withOpenSSL $ allocaBytes 2048 $ \ptr -> do
   c2 <- connect secret "127.0.0.1" port2
   a2 <- wait aw2
 
-  aw3 <- async $ acceptUnsafe secret port3
-  threadDelay 10000
-  c3 <- connectUnsafe secret "127.0.0.1" port3
-  a3 <- wait aw3
-  forkIO (forever $ recvUnsafe a3)
-
-  aw4 <- async $ acceptUnsafe secret port4
-  threadDelay 10000
-  c4 <- connectUnsafe secret "127.0.0.1" port4
-  a4 <- wait aw4
 
   defaultMain [ bench "encode 16b" $   nf (fst . encode ctxOut) x16
               , bench "encode 32b" $   nf (fst . encode ctxOut) x32
