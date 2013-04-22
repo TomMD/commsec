@@ -187,7 +187,7 @@ expandSecret entropy sz =
   enc k i pt = B.unsafeCreate sz $ \ctPtr ->
                 B.useAsCString pt $ \ptPtr ->
                  B.useAsCString i $ \iv ->
-                   encryptCTR k (castPtr iv) (castPtr ctPtr) (castPtr ptPtr) sz
+                   encryptCTR k (castPtr iv) nullPtr (castPtr ctPtr) (castPtr ptPtr) sz
 
 -- |Expands the provided 128 (or more) bit secret into two
 -- keys to create a connection.

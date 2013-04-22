@@ -1,8 +1,8 @@
 {-# LANGUAGE CPP, BangPatterns, RecordWildCards, DeriveDataTypeable #-}
 -- | CommSec is a package that provides communication security for
--- a datagram (vs streaming) style of communications.  Using an ephemeral shared
--- secret you can build contexts for sending to or receiving from with one or more
--- peers.
+-- use with Haskell sockets.  Using an ephemeral shared
+-- secret you can build contexts for sending or receiving data between one
+-- or more peers.
 --
 -- Do not reuse the shared secret!  Key agreement mechanisms that leverage
 -- PKI might be added later.
@@ -235,7 +235,7 @@ encode ctx@(Out {..}) pt
   | aesCtr == maxBound = throw OldContext
   | otherwise =
     let !iv_ct_tag = encryptGCM outKey aesCtr saltOut (pad pt)
-    in (iv_ct_tag, ctx { aesCtr = 1 + aesCtr })
+    in (iv_ct_tag, ctx { aesCtr = ((fromIntegral $ B.length pt + 31) `rem` 16) + 1 + aesCtr })
 
 -- |Given a message length, returns the number of bytes an encoded message
 -- will consume.
@@ -270,7 +270,7 @@ encodePtr ctx@(Out {..}) ptPtr pkgPtr ptLen
       copyBytes ptPaddedPtr ptPtr ptLen
       memset (ptPaddedPtr `plusPtr` ptLen) padding (fromIntegral padding)
       encryptGCMPtr outKey aesCtr saltOut ptPaddedPtr totalLen pkgPtr
-      return (ctx { aesCtr = 1 + aesCtr })
+      return (ctx { aesCtr = (fromIntegral totalLen `rem` 16) + 1 + aesCtr })
   where
     memset :: Ptr Word8 -> Int -> Word8 -> IO ()
     memset ptr1 len val = mapM_ (\o -> pokeElemOff ptr1 o val) [0..len-1]
