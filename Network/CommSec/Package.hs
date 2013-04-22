@@ -235,7 +235,7 @@ encode ctx@(Out {..}) pt
   | aesCtr == maxBound = throw OldContext
   | otherwise =
     let !iv_ct_tag = encryptGCM outKey aesCtr saltOut (pad pt)
-    in (iv_ct_tag, ctx { aesCtr = ((fromIntegral $ B.length pt + 31) `rem` 16) + 1 + aesCtr })
+    in (iv_ct_tag, ctx { aesCtr = 1 + aesCtr })
 
 -- |Given a message length, returns the number of bytes an encoded message
 -- will consume.
@@ -270,7 +270,7 @@ encodePtr ctx@(Out {..}) ptPtr pkgPtr ptLen
       copyBytes ptPaddedPtr ptPtr ptLen
       memset (ptPaddedPtr `plusPtr` ptLen) padding (fromIntegral padding)
       encryptGCMPtr outKey aesCtr saltOut ptPaddedPtr totalLen pkgPtr
-      return (ctx { aesCtr = (fromIntegral totalLen `rem` 16) + 1 + aesCtr })
+      return (ctx { aesCtr = 1 + aesCtr })
   where
     memset :: Ptr Word8 -> Int -> Word8 -> IO ()
     memset ptr1 len val = mapM_ (\o -> pokeElemOff ptr1 o val) [0..len-1]
