@@ -43,10 +43,6 @@ receiving (Network.Commsec.recv) the operation retries on most errors (Duplicate
 message, invalid ICV, etc) unless it is an 'OldContext' error, which is thrown
 as an exception.  Sending message (Network.CommSec.send) can also throw 'OldContext'.
 
-##TODO
-
- * Make a commsec-pki or commsec-sshkey package that performs authentication, key agreement, and maybe exception handling/rekey.
-
 ##Performance
 
 Currently the performance of comm-sec is all about the AESgcm routine, which is sub-optimal.  This is expected to be improved.
@@ -79,6 +75,8 @@ Currently the performance of comm-sec is all about the AESgcm routine, which is 
 To obtain ephemeral keys you might want to use your systems IKE
 daemon, a diffe-helman computation with authentication, or perhaps an
 MQV using Haskell's hecc package.
+
+Alternatively, you can use [commsec-keyexchange](https://github.com/TomMD/commsec-keyexchange).
 
 ##DISCLAIMER
 This package is intended as an extremely light-weight communications
