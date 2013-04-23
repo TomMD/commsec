@@ -100,18 +100,18 @@ data InContext
 -- communicate with an identically initialized in context.
 newOutContext :: ByteString -> OutContext
 newOutContext bs
-    | B.length bs < 24 = error $ "Not enough entropy: " ++ show (B.length bs)
+    | B.length bs < 20 = error $ "Not enough entropy: " ++ show (B.length bs)
     | otherwise =
         let aesCtr  = 1
             saltOut = unsafePerformIO $ B.unsafeUseAsCString bs $ peekBE32 . castPtr
             outKey  = fromMaybe (error "Could not build a key") $ buildKey $ B.drop (sizeOf saltOut) bs
         in Out {..}
 
--- | Given at least 24 bytes of entropy, produce an in context that can
+-- | Given at least 20 bytes of entropy, produce an in context that can
 -- communicate with an identically initialized out context.
 newInContext  :: ByteString -> SequenceMode -> InContext
 newInContext bs md
-    | B.length bs < 24 = error $ "Not enough entropy: " ++ show (B.length bs)
+    | B.length bs < 20 = error $ "Not enough entropy: " ++ show (B.length bs)
     | otherwise =
         let bitWindow = zeroWindow
             seqVal = 0

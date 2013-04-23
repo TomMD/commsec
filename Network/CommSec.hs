@@ -13,6 +13,8 @@ module Network.CommSec
     -- * Establishing a connection from a public identity (PKI)
     -- , acceptId
     -- , connectId
+    -- * Utility
+    , expandSecret
     ) where
 
 import Crypto.Classes (buildKey)
@@ -89,7 +91,7 @@ recvWith get put conn@(Conn {..}) = allocGo baseSize
           (b, res) <- B.createAndTrim' sz $ \ptPtr -> do
             resSz <- recvPtrOfSz get put conn ptPtr sz
             case resSz of
-                Left err -> if err `elem` retryOn then return (0,0,Err)
+                Left err -> if err `elem` retryOn then print err >> return (0,0,Err)
                                                   else throw err
                 Right s  ->
                     if s > sz
