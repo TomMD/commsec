@@ -47,9 +47,12 @@ data Connection
 pMVar :: MVar v -> v -> IO ()
 pMVar m v = v `seq` putMVar m v
 
+-- |Send a datagram, first encrypting it, using the given secure
+-- connection.
 send :: Connection -> B.ByteString -> IO ()
 send = sendWith takeMVar pMVar
 
+-- |Receive a datagram sent over the given secure connection
 recv :: Connection -> IO B.ByteString
 recv = recvWith takeMVar pMVar
 
