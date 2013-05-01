@@ -10,6 +10,7 @@ module Network.CommSec
     -- * Establishing a connection from a shared secret
     , accept
     , connect
+    , close
     -- * Establishing a connection from a public identity (PKI)
     -- , acceptId
     -- , connectId
@@ -252,6 +253,10 @@ connect :: B.ByteString
         -> PortNumber
         -> IO Connection
 connect = doConnect newMVar
+
+-- |Close a connection
+close :: Connection -> IO ()
+close c = Net.close (socket c)
 
 -- |We use a word32 to indicate the size of a datagram
 sizeTagLen :: Int
