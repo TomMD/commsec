@@ -36,7 +36,7 @@ import qualified Data.ByteString.Internal as B
 import Foreign.Ptr
 import Foreign.Marshal.Alloc
 import Data.Word
-import Data.Maybe (listToMaybe)
+import Data.Maybe (isJust, listToMaybe)
 
 -- | A connection is a secure bidirectional communication channel.
 data Connection
@@ -51,118 +51,95 @@ pMVar m v = v `seq` putMVar m v
 -- |Send a datagram, first encrypting it, using the given secure
 -- connection.
 send :: Connection -> B.ByteString -> IO ()
-send = sendWith takeMVar pMVar
+send conn msg = B.useAsCStringLen msg $ \(ptPtr, ptLen) ->
+  sendPtr conn (castPtr ptPtr) ptLen
 
--- |Receive a datagram sent over the given secure connection
+data RecvRes = Good | Err deriving (Eq)
+
 recv :: Connection -> IO B.ByteString
-recv = recvWith takeMVar pMVar
+recv conn@(Conn {..}) =
+  allocaBytes sizeTagLen $ \tmpPtr ->
+  modifyMVar inCtx       $ \iCtx   ->
+  go tmpPtr iCtx
+
+  where
+
+  go :: Ptr Word8 -> InContext -> IO (InContext, B.ByteString)
+  go tmpPtr iCtx = do
+    recvBytesPtr socket tmpPtr sizeTagLen -- XXX This is unacceptable for datagrams
+    sz <- fromIntegral `fmap` peekBE32 tmpPtr
+    when (sz > 2^28)
+      (fail "recv: A message is over 256MB! Probably corrupt data or the stream is unsyncronized.")
+    (b, (iCtx,res)) <- B.createAndTrim' sz $ \ptPtr -> -- second time iCtx shadowed
+        do (iCtx,resSz) <- recvPtrOfSz socket iCtx ptPtr sz -- first time iCtx shadowed
+           case resSz of
+             Left err
+               | err `elem` retryOn -> return (0,0,(iCtx,Err))
+               | otherwise          -> throw err
+             Right s                -> return (0,s,(iCtx,Good))
+    case res of
+            Good   -> return (iCtx,b)
+            Err    -> go tmpPtr iCtx
+
+retryOn :: [CommSecError]
+retryOn = [DuplicateSeq, InvalidICV, BadPadding]
 
 -- |Sends a message over the connection.
 sendPtr :: Connection -> Ptr Word8 -> Int -> IO ()
-sendPtr = sendPtrWith takeMVar pMVar
+sendPtr c@(Conn {..}) ptPtr ptLen = do
+    let ctLen  = encBytes ptLen
+        pktLen = sizeTagLen + ctLen
+    allocaBytes pktLen $ \pktPtr -> do
+        let ctPtr = pktPtr `plusPtr` sizeTagLen
+        pokeBE32 pktPtr (fromIntegral ctLen)
+        modifyMVar_ outCtx $ \oCtx -> encodePtr oCtx ptPtr ctPtr ptLen
+        sendBytesPtr socket pktPtr pktLen
 
 -- |Blocks till it receives a valid message, placing the resulting plaintext
 -- in the provided buffer.  If the incoming message is larger that the
 -- provided buffer then the message is truncated.  This process also incurs
 -- an additional copy.
 recvPtr :: Connection -> Ptr Word8 -> Int -> IO Int
-recvPtr = recvPtrWith takeMVar pMVar
+recvPtr c@(Conn{..}) ptPtr maxLen =
+  allocaBytes sizeTagLen $ \szPtr ->
+  modifyMVar inCtx       $ \iCtx -> do
+  go szPtr iCtx
 
--- helper for send
-sendWith :: (MVar OutContext -> IO OutContext) -> (MVar OutContext -> OutContext -> IO ()) -> Connection -> B.ByteString -> IO ()
-sendWith get put conn msg = B.useAsCStringLen msg $ \(ptPtr, ptLen) ->
-  sendPtrWith get put conn (castPtr ptPtr) ptLen
-{-# INLINE sendWith #-}
+  where
 
-data RecvRes = Good | Small | Err deriving (Eq)
-
--- helper for recv
-recvWith :: (MVar InContext -> IO InContext) -> (MVar InContext -> InContext -> IO ()) -> Connection -> IO B.ByteString
-recvWith get put conn@(Conn {..}) = allocGo baseSize
- where
-    baseSize = 2048
-    allocGo :: Int -> IO B.ByteString
-    allocGo n = allocaBytes sizeTagLen (go n)
-
-    --
-
-    go :: Int -> Ptr Word8 -> IO B.ByteString
-    go sz tmpPtr
-      | sz > 2^28 = error "recvWith: A message is over 256MB! Probably corrupt data or the stream is unsyncronized."
-      | otherwise = do
-          recvBytesPtr socket tmpPtr sizeTagLen
-          sz <- fromIntegral `fmap` peekBE32 tmpPtr
-          (b, res) <- B.createAndTrim' sz $ \ptPtr -> do
-            resSz <- recvPtrOfSz get put conn ptPtr sz
-            case resSz of
-                Left err -> if err `elem` retryOn then print err >> return (0,0,Err)
-                                                  else throw err
-                Right s  ->
-                    if s > sz
-                        then return (0,0,Small)
-                        else return (0,s,Good)
-          case res of
-              Good   -> return b
-              Small  -> go (sz * 2) tmpPtr
-              Err    -> go sz tmpPtr
-{-# INLINE recvWith #-}
-
-retryOn :: [CommSecError]
-retryOn = [DuplicateSeq, InvalidICV, BadPadding]
-
--- helper for sendPtr
-sendPtrWith :: (MVar OutContext -> IO OutContext) -> (MVar OutContext -> OutContext -> IO ()) -> Connection -> Ptr Word8 -> Int -> IO ()
-sendPtrWith get put c@(Conn {..}) ptPtr ptLen = do
-    let ctLen  = encBytes ptLen
-        pktLen = sizeTagLen + ctLen
-    allocaBytes pktLen $ \pktPtr -> do
-        let ctPtr = pktPtr `plusPtr` sizeTagLen
-        pokeBE32 pktPtr (fromIntegral ctLen)
-        o  <- get outCtx
-        o2 <- encodePtr o ptPtr ctPtr ptLen
-        put outCtx o2
-        sendBytesPtr socket pktPtr pktLen
-        return ()
-
--- helper for recvPtr
-recvPtrWith :: (MVar InContext -> IO InContext) -> (MVar InContext -> InContext -> IO ()) -> Connection -> Ptr Word8 -> Int -> IO Int
-recvPtrWith get put c@(Conn{..}) ptPtr maxLen = do
-    r <- go
-    case r of
-        Nothing  -> recvPtrWith get put c ptPtr maxLen
-        Just res -> return res
- where
-  go :: IO (Maybe Int)
-  go = allocaBytes sizeTagLen $ \szPtr -> do
+  go szPtr iCtx = do
     recvBytesPtr socket szPtr sizeTagLen
     len <- fromIntegral `fmap` peekBE32 szPtr
     let ptMaxSize = decBytes (len - sizeTagLen)
-    allocaBytes len $ \ctPtr -> do
+    (iCtx, mbOutLen) <- allocaBytes len $ \ctPtr -> do -- shadow iCtx
       recvBytesPtr socket ctPtr len
-      i <- get inCtx
       let finish pointer = do
-              dRes <- decodePtr i ctPtr pointer len
+              dRes <- decodePtr iCtx ctPtr pointer len
               case dRes of
-                Left err -> if err `elem` retryOn then return Nothing
-                                                  else throw err
-                Right (resLen,i2) -> put inCtx i2 >> return (Just resLen)
-      if ptMaxSize > maxLen
-          then allocaBytes ptMaxSize (\tmp -> do
-                        res <- finish tmp
-                        B.memcpy ptPtr tmp maxLen
-                        return res)
-          else finish ptPtr
+                Left err
+                  | err `elem` retryOn -> return (iCtx, Nothing) -- preserve old context
+                  | otherwise          -> throw err
+                Right (resLen,i2) -> return (i2, Just resLen)
+      if ptMaxSize > maxLen -- shadow iCtx
+        then allocaBytes ptMaxSize $ \tmp ->
+               do res <- finish tmp
+                  when (isJust (snd res)) -- don't bother copying in the retry case
+                       (B.memcpy ptPtr tmp maxLen)
+                  return res
+        else finish ptPtr
+    case mbOutLen of
+      Nothing     -> go szPtr iCtx -- retry
+      Just outLen -> return (iCtx, outLen)
 
 -- Receive sz bytes and decode it into ptPtr, helper for recvWith
-recvPtrOfSz :: (MVar InContext -> IO InContext) -> (MVar InContext -> InContext -> IO ()) -> Connection -> Ptr Word8 -> Int -> IO (Either CommSecError Int)
-recvPtrOfSz get put (Conn {..}) ptPtr sz =
+recvPtrOfSz :: Socket -> InContext -> Ptr Word8 -> Int -> IO (InContext, Either CommSecError Int)
+recvPtrOfSz socket iCtx ptPtr sz =
     allocaBytes sz $ \ct -> do
         recvBytesPtr socket ct sz
-        i <- get inCtx
-        dRes <- decodePtr i ct ptPtr sz
-        case dRes of
-                Left err -> return (Left err)
-                Right (resLen,i2) -> put inCtx i2 >> return (Right resLen)
+        dRes <- decodePtr iCtx ct ptPtr sz
+        return $ case dRes of
+          Left err          -> (iCtx, Left err) -- restore old context
+          Right (resLen,i2) -> (i2  , Right resLen)
 
 -- Retry until we have received exactly the specified number of bytes
 recvBytesPtr :: Socket -> Ptr Word8 -> Int -> IO ()
