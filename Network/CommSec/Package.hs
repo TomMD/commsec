@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, BangPatterns, RecordWildCards, DeriveDataTypeable #-}
+{-# LANGUAGE CPP, BangPatterns, RecordWildCards, DeriveDataTypeable, TupleSections #-}
 -- | CommSec is a package that provides communication security for
 -- use with Haskell sockets.  Using an ephemeral shared
 -- secret you can build contexts for sending or receiving data between one
@@ -61,15 +61,13 @@ import Control.Exception
 import Network.CommSec.Types
 import Network.CommSec.BitWindow
 
-gPadMax,gBlockLen,gTagLen,gCtrSize :: Int
-gPadMax   = 16
-gBlockLen = 16
+gTagLen,gCtrSize :: Int
 gTagLen   = 16
 gCtrSize  = 8
 
 -- IPSec inspired packet format:
 --
---      [CNT (used for both the IV and seq) | CT of Payload + Pad | ICV]
+--      [CNT (used for both the IV and seq) | CT of Payload | ICV]
 
 -- | A context useful for sending data.
 data OutContext =
@@ -125,24 +123,14 @@ newInContext bs md
 -- Encrypts multiple-of-block-sized input, returing a bytestring of the
 -- [ctr, ct, tag].
 encryptGCM :: AESKey
-           -> Word64 -- ^ AES GCM Counter (IV)
-           -> Word32 -- ^ Salt
+           -> Word64     -- ^ AES GCM Counter (IV)
+           -> Word32     -- ^ Salt
            -> ByteString -- ^ Plaintext
            -> ByteString
 encryptGCM key ctr salt pt = unsafePerformIO $ do
-    let ivLen  = sizeOf ctr + sizeOf salt
-        tagLen = gTagLen
-        paddedLen = B.length pt
-    allocaBytes ivLen $ \ptrIV -> do
-      -- Build the IV
-      pokeBE32 ptrIV salt
-      pokeBE (ptrIV `plusPtr` sizeOf salt) ctr
-      B.unsafeUseAsCString pt $ \ptrPT -> do
-        B.create (paddedLen + sizeOf ctr + tagLen) $ \ctPtr -> do
-        pokeBE ctPtr ctr
-        let tagPtr = ctPtr' `plusPtr` paddedLen
-            ctPtr' = ctPtr `plusPtr` sizeOf ctr
-        AES.encryptGCM key ptrIV ivLen nullPtr 0 (castPtr ptrPT) (B.length pt) (castPtr ctPtr') tagPtr
+    B.unsafeUseAsCString pt $ \ptPtr -> do
+    B.create (encBytes (B.length pt)) $ \ctPtr -> do
+    encryptGCMPtr key ctr salt (castPtr ptPtr) (B.length pt) (castPtr ctPtr)
 
 
 -- Encrypts multiple-of-block-sized input, filling a pointer with the
@@ -157,20 +145,19 @@ encryptGCMPtr :: AESKey
 encryptGCMPtr key ctr salt ptPtr ptLen ctPtr = do
     let ivLen  = sizeOf ctr + sizeOf salt
         tagLen = gTagLen
-        paddedLen = ptLen
     allocaBytes ivLen $ \ptrIV -> do
       -- Build the IV
       pokeBE32 ptrIV salt
       pokeBE (ptrIV `plusPtr` sizeOf salt) ctr
       pokeBE ctPtr ctr
-      let tagPtr = ctPtr' `plusPtr` paddedLen
+      let tagPtr = ctPtr' `plusPtr` ptLen
           ctPtr' = ctPtr `plusPtr` sizeOf ctr
       AES.encryptGCM key ptrIV ivLen nullPtr 0 (castPtr ptPtr) ptLen (castPtr ctPtr') tagPtr
 
 -- | GCM decrypt and verify ICV.
 decryptGCMPtr :: AESKey
-              -> Word64 -- ^ AES GCM Counter (IV)
-              -> Word32 -- ^ Salt
+              -> Word64    -- ^ AES GCM Counter (IV)
+              -> Word32    -- ^ Salt
               -> Ptr Word8 -- ^ Ciphertext
               -> Int       -- ^ Ciphertext length
               -> Ptr Word8 -- ^ Tag
@@ -226,7 +213,7 @@ decryptGCM key ctr salt ct tag
             else return (Right pt)
 
 -- |Use an 'OutContext' to protect a message for transport.
--- Message format: [ctr, ct, padding, tag].
+-- Message format: [ctr, ct, tag].
 --
 -- This routine can throw an exception of 'OldContext' if the context being
 -- used has expired.
@@ -234,22 +221,19 @@ encode :: OutContext -> ByteString -> (ByteString, OutContext)
 encode ctx@(Out {..}) pt 
   | aesCtr == maxBound = throw OldContext
   | otherwise =
-    let !iv_ct_tag = encryptGCM outKey aesCtr saltOut (pad pt)
+    let !iv_ct_tag = encryptGCM outKey aesCtr saltOut pt
     in (iv_ct_tag, ctx { aesCtr = 1 + aesCtr })
 
 -- |Given a message length, returns the number of bytes an encoded message
 -- will consume.
 encBytes :: Int -> Int
 encBytes lenMsg =
-     let lenBlock = gBlockLen
-         tagLen = lenBlock
-         ctrLen = gCtrSize
-         r = lenBlock - (lenMsg `rem` lenBlock)
-         pdLen = if r == 0 then lenBlock else r
-    in ctrLen + lenMsg + pdLen + tagLen
+    let tagLen   = gTagLen
+        ctrLen   = gCtrSize
+    in ctrLen + lenMsg + tagLen
 
--- |Given a package length, returns the maximum number of bytes the
--- underlying message could be (including padding).
+-- |Given a package length, returns the number of bytes in the
+-- underlying message.
 decBytes :: Int -> Int
 decBytes lenPkg =
     let tagLen = gTagLen
@@ -264,16 +248,8 @@ encodePtr :: OutContext -> Ptr Word8 -> Ptr Word8 -> Int -> IO OutContext
 encodePtr ctx@(Out {..}) ptPtr pkgPtr ptLen
   | aesCtr == maxBound = throw OldContext
   | otherwise = do
-    let !totalLen = padding + ptLen
-        !padding  = padLen ptLen
-    allocaBytes totalLen $ \ptPaddedPtr -> do
-      copyBytes ptPaddedPtr ptPtr ptLen
-      memset (ptPaddedPtr `plusPtr` ptLen) padding (fromIntegral padding)
-      encryptGCMPtr outKey aesCtr saltOut ptPaddedPtr totalLen pkgPtr
+      encryptGCMPtr outKey aesCtr saltOut ptPtr ptLen pkgPtr
       return (ctx { aesCtr = 1 + aesCtr })
-  where
-    memset :: Ptr Word8 -> Int -> Word8 -> IO ()
-    memset ptr1 len val = mapM_ (\o -> pokeElemOff ptr1 o val) [0..len-1]
 
 -- |@decodePtr inCtx pkg msg pkgLen@ decrypts and verifies a package at
 -- location @pkg@ of size @pkgLen@.  The resulting message is placed at
@@ -286,117 +262,41 @@ decodePtr ctx pkgPtr msgPtr pkgLen = do
         !ctLen  = pkgLen - tagLen - sizeOf cnt
         !tagPtr = pkgPtr `plusPtr` (pkgLen - tagLen)
         tagLen  = gTagLen
-        paddedLen = ctLen
     r <- decryptGCMPtr (inKey ctx) cnt (saltIn ctx) ctPtr ctLen tagPtr tagLen msgPtr
     case r of
         Left err -> return (Left err)
-        Right () -> helper ctx cnt paddedLen
+        Right () -> fmap (ctLen,) `fmap` helper ctx cnt
   where
     {-# INLINE helper #-}
-    helper :: InContext -> Word64 -> Int
-                   -> IO (Either CommSecError (Int,InContext))
-    helper (InStrict {..}) cnt paddedLen
-        | cnt > seqVal = do
-                        pdLen <- padLenPtr msgPtr paddedLen
-                        case pdLen of
-                            Nothing -> return $ Left BadPadding
-                            Just l  -> return $ Right (paddedLen - l, InStrict cnt saltIn inKey)
+    helper :: InContext -> Word64
+           -> IO (Either CommSecError InContext)
+    helper (InStrict {..}) cnt
+        | cnt > seqVal = return $ Right (InStrict cnt saltIn inKey)
         | otherwise = return (Left DuplicateSeq)
-    helper (InSequential {..}) cnt paddedLen
-        | cnt == seqVal + 1 = do
-                        pdLen <- padLenPtr msgPtr paddedLen
-                        case pdLen of
-                            Nothing -> return $ Left BadPadding
-                            Just l  -> return $ Right (paddedLen - l, InSequential cnt saltIn inKey)
+    helper (InSequential {..}) cnt
+        | cnt == seqVal + 1 = return $ Right (InSequential cnt saltIn inKey)
         | otherwise = return (Left DuplicateSeq)
 
-    helper (In {..}) cnt paddedLen = do
+    helper (In {..}) cnt = do
         case updateBitWindow bitWindow cnt of
             Left e -> return (Left e)
-            Right newMask -> do
-                pdLen <- padLenPtr msgPtr paddedLen
-                case pdLen of
-                    Nothing -> return $ Left BadPadding
-                    Just l  -> return $ Right (paddedLen - l, In newMask saltIn inKey)
+            Right newMask -> return $ Right (In newMask saltIn inKey)
 
 -- |Use an 'InContext' to decrypt a message, verifying the ICV and sequence
 -- number.  Unlike sending, receiving is more likely to result in an
 -- exceptional condition and thus it returns an 'Either' value.
 --
--- Message format: [ctr, ct, padding, tag].
+-- Message format: [ctr, ct, tag].
 decode :: InContext -> ByteString -> Either CommSecError (ByteString, InContext)
-decode ctx pkg =
-    let cnt    = unsafePerformIO $ B.unsafeUseAsCString pkg (peekBE . castPtr)
-        cntLen = sizeOf cnt
-        tagLen = gTagLen
-        tag    = B.drop (B.length pkg - tagLen) pkg
-        ct     = let st = (B.drop cntLen pkg) in B.take (B.length st - tagLen) st
-        ptpd   = decryptGCM (inKey ctx) cnt (saltIn ctx) ct tag
-    in helper ctx cnt ptpd
-  where
-    {-# INLINE helper #-}
-    helper (In {..}) cnt ptpd =
-       case updateBitWindow bitWindow cnt of
-            Left e -> Left e
-            Right bw ->
-                case ptpd of
-                    Left err    -> Left err
-                    Right ptPad ->
-                      case unpad ptPad of
-                          Nothing -> Left BadPadding
-                          Just pt -> Right (pt, In bw saltIn inKey)
-    helper (InStrict {..}) cnt ptpd
-        | cnt > seqVal =
-                case ptpd of
-                    Left err    -> Left err
-                    Right ptPad ->
-                      case unpad ptPad of
-                          Nothing -> Left BadPadding
-                          Just pt -> Right (pt, InStrict cnt saltIn inKey)
-        | otherwise = Left DuplicateSeq
-    helper (InSequential {..}) cnt ptpd
-        | cnt == seqVal + 1 =
-                case ptpd of
-                    Left err    -> Left err
-                    Right ptPad ->
-                      case unpad ptPad of
-                          Nothing -> Left BadPadding
-                          Just pt -> Right (pt, InSequential cnt saltIn inKey)
-        | otherwise = Left DuplicateSeq
-
--- |Pad a bytestring to block size
-pad :: ByteString -> ByteString
-pad bs =
-        let pd = B.replicate pdLen pdValue
-            pdLen = padLen (B.length bs)
-            pdValue = fromIntegral pdLen
-        in B.concat [bs,pd]
-
--- |Given length of a plaintext message, return the length of the padding
--- needed.
-padLen :: Int -> Int
-padLen ptLen =
-    let blkLen = gBlockLen
-        r      = blkLen - (ptLen `rem` blkLen)
-    in if r == 0 then blkLen else r
-{-# INLINE padLen #-}
-
--- |Remove padding from a padded bytestring.  This is a varient of PCKS5 padding that does not check the pad values.
-unpad :: ByteString -> Maybe ByteString
-unpad bs
-    | len > 0 = Just $ B.take (len - fromIntegral (B.last bs)) bs
-    | otherwise = Nothing
-  where
-      len = B.length bs
-
--- |Given a pointer to padded data and the length of the data, determine the length of the padding.
--- Perhaps this should be called 'unpadPtr'
-padLenPtr :: Ptr Word8 -> Int -> IO (Maybe Int)
-padLenPtr ptr len
-    | len < gPadMax = return Nothing
-    | otherwise = do
-        r <- fromIntegral `fmap` (peekElemOff ptr (len-1) :: IO Word8)
-        if r <= gPadMax then return (Just r) else return Nothing
+decode ctx pkg = unsafePerformIO $ do
+    let ptLen = decBytes (B.length pkg)
+    pt <- B.mallocByteString ptLen
+    r  <- withForeignPtr pt $ \ptPtr ->  do
+           B.unsafeUseAsCString pkg $ \pkgPtr -> do
+             decodePtr ctx (castPtr pkgPtr) (castPtr ptPtr) (B.length pkg)
+    case r of
+      Left e -> return (Left e)
+      Right (_,c) -> return (Right (B.fromForeignPtr pt 0 ptLen,c))
 
 peekBE :: Ptr Word8 -> IO Word64
 peekBE p = do
