@@ -92,8 +92,10 @@ sendPtr c@(Conn {..}) ptPtr ptLen = do
     allocaBytes pktLen $ \pktPtr -> do
         let ctPtr = pktPtr `plusPtr` sizeTagLen
         pokeBE32 pktPtr (fromIntegral ctLen)
-        modifyMVar_ outCtx $ \oCtx -> encodePtr oCtx ptPtr ctPtr ptLen
-        sendBytesPtr socket pktPtr pktLen
+        modifyMVar_ outCtx $ \oCtx -> do
+            r <- encodePtr oCtx ptPtr ctPtr ptLen
+            sendBytesPtr socket pktPtr pktLen
+            return r
 
 -- |Blocks till it receives a valid message, placing the resulting plaintext
 -- in the provided buffer.  If the incoming message is larger that the
