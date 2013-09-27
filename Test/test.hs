@@ -3,6 +3,8 @@ import Network.CommSec
 import Network.CommSec.Package
 import Network.CommSec.BitWindow
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Unsafe as U
+import qualified Data.ByteString.Internal as I
 import Data.Either
 import Test.QuickCheck
 import Test.QuickCheck.Monadic
@@ -10,6 +12,7 @@ import Control.Concurrent.Async
 import Data.Bits
 import Foreign.Marshal.Alloc
 import Foreign.Storable
+import Foreign.Ptr (castPtr)
 
 instance Arbitrary B.ByteString where
     arbitrary = B.pack `fmap` arbitrary
@@ -23,16 +26,16 @@ entropy = B.replicate 64 0
 
 prop_package_encDecId x = either (error . show) fst (decode inCtx $ fst (encode outCtx x)) == x
  where
-    inCtx = newInContext entropy
+    inCtx = newInContext entropy Sequential
     outCtx = newOutContext entropy
 
-prop_bitwindow_rejects_low bw cnt = cnt < (fst bw) ==> isLeft (updateBitWindow bw cnt)
+prop_bitwindow_rejects_low bw cnt = cnt < fst bw ==> isLeft (updateBitWindow bw cnt)
 
 prop_bitwindow_rejects_match bw cnt = testBit (snd bw) (fromIntegral $ cnt - fst bw) ==> isLeft (updateBitWindow bw cnt)
 
 prop_bitwindow_accepts_high bw cnt = cnt > (fst bw + 63) ==> isRight (updateBitWindow bw cnt)
 
-prop_bitwindow_accepts_nonmatch bw cnt = cnt > (fst bw) && cnt < (fst bw + 64) && not (testBit (snd bw) (fromIntegral $ cnt - fst bw)) ==> isRight (updateBitWindow bw cnt)
+prop_bitwindow_accepts_nonmatch bw cnt = cnt > fst bw && cnt < (fst bw + 64) && not (testBit (snd bw) (fromIntegral $ cnt - fst bw)) ==> isRight (updateBitWindow bw cnt)
 
 prop_bitwindow_rejects_dup bw cs =
         let bwFinal = foldl (\b' c -> either (const b') id (updateBitWindow b' c)) bw cs
@@ -44,6 +47,13 @@ prop_send_recv_valid cIn cOut bs = monadicIO t
         run $ send cOut bs
         bs' <- run $ recv cIn
         assert (bs ==  bs')
+
+prop_send_recv_ptr_valid cIn cOut bs = monadicIO t
+  where t = do
+        r <- run $ U.unsafeUseAsCStringLen bs $ \(ptr,len) -> do
+                    sendPtr cOut (castPtr ptr) len
+                    I.create len (\p -> recvPtr cIn p len >> return ())
+        assert (r == bs)
 
 prop_peek_poke_BE val = monadicIO t
   where t = do
@@ -63,13 +73,14 @@ prop_peek_poke_BE32 val = monadicIO t
 
 data Test = forall a. Testable a => T String a
 
-tests :: Connection Safe -> Connection Safe -> [Test]
+tests :: Connection -> Connection -> [Test]
 tests cIn cOut =
         [
           T "prop_send_recv_valid" (prop_send_recv_valid cIn cOut)
-        , T "prop_peek_poke_BE" (prop_peek_poke_BE)
-        , T "prop_peek_poke_BE32" (prop_peek_poke_BE32)
-        , T "prop_bitwindow_rejects_dup" (prop_bitwindow_rejects_dup)
+        , T "prop_send_recv_ptr_valid" (prop_send_recv_ptr_valid cIn cOut)
+        , T "prop_peek_poke_BE" prop_peek_poke_BE
+        , T "prop_peek_poke_BE32" prop_peek_poke_BE32
+        , T "prop_bitwindow_rejects_dup" prop_bitwindow_rejects_dup
         , T "prop_bitwindow_rejects_low" prop_bitwindow_rejects_low
         , T "prop_bitwindow_rejects_match" prop_bitwindow_rejects_match
         , T "prop_bitwindow_accepts_high" prop_bitwindow_accepts_high
@@ -80,7 +91,7 @@ tests cIn cOut =
 runTest :: Test -> IO ()
 runTest (T s a) = putStrLn s >> quickCheckWith (stdArgs { maxSuccess = 10000 }) a
 
-runTests :: Connection Safe -> Connection Safe -> IO ()
+runTests :: Connection -> Connection -> IO ()
 runTests i o = mapM_ runTest (tests i o)
 
 main = do

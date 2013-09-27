@@ -43,6 +43,7 @@ data Connection
             = Conn { inCtx        :: MVar InContext
                    , outCtx       :: MVar OutContext
                    , socket       :: Socket
+                   , socketAddr   :: SockAddr -- ^ address of remote
                    }
 
 pMVar :: MVar v -> v -> IO ()
@@ -195,7 +196,7 @@ doAccept create s p
     Net.setSocketOption sock Net.ReuseAddr 1
     Net.bind sock sockaddr
     Net.listen sock 10
-    socket <- fst `fmap` Net.accept sock
+    (socket,socketAddr) <- Net.accept sock
     Net.setSocketOption socket Net.NoDelay 1
     Net.close sock
     inCtx  <- create iCtx
@@ -206,14 +207,14 @@ doConnect  :: (forall x. x -> IO (MVar x)) -> B.ByteString -> HostName -> PortNu
 doConnect create s hn p
   | B.length s < 16 = error "Invalid input entropy"
   | otherwise = do
-    sockaddr <- resolve hn p
+    socketAddr <- resolve hn p
     let ent  = expandSecret s 64
         k2   = B.take 32 ent
         k1   = B.drop 32 ent
         iCtx = newInContext k1 Sequential
         oCtx = newOutContext k2
     socket <- Net.socket Net.AF_INET Net.Stream Net.defaultProtocol
-    Net.connect socket sockaddr
+    Net.connect socket socketAddr
     Net.setSocketOption socket Net.NoDelay 1
     Net.setSocketOption socket Net.ReuseAddr 1
     inCtx  <- create iCtx

@@ -26,6 +26,7 @@ x256  = B.replicate 256 0
 x512  = B.replicate 512 0
 x1024 = B.replicate 1024 0
 x2048 = B.replicate 2048 0
+x512K = B.replicate (2^19) 0
 
 pkg16 = fst $ encode ctxOut x16
 pkg32 = fst $ encode ctxOut x32
@@ -36,7 +37,7 @@ pkg512 = fst $ encode ctxOut x512
 pkg1024 = fst $ encode ctxOut x1024
 pkg2048 = fst $ encode ctxOut x2048
 
-main = withOpenSSL $ allocaBytes 2048 $ \ptr -> do
+main = withOpenSSL $ allocaBytes (2^19) $ \ptr -> do
   let secret = B.replicate 32 0
       port1 = 1982
       port2 = 9843
@@ -88,6 +89,8 @@ main = withOpenSSL $ allocaBytes 2048 $ \ptr -> do
               , bench "send/recv stream 16b" $ (send c2 x16 >> recv a2)
               , bench "secure-sockets 16b" $ (S.write c0 x16 >> S.read a0 16)
               , bench "send/recv stream 2048b (ptr)" $ (sendPtr c2 ptr 2048 >> recvPtr a2 ptr 2048)
+              , bench "send/recv stream 512KB (ptr)" $ (sendPtr c2 ptr (2^19) >> recvPtr a2 ptr (2^19))
               , bench "send/recv stream 2048b" $ (send c2 x2048 >> recv a2)
               , bench "secure-sockets 2048b" $ (S.write c0 x2048 >> S.read a0 2048)
+              -- , bench "secure-sockets 512KB" $ (S.write c0 x512K >> S.read a0 (2^19))
               ]
