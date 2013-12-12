@@ -37,12 +37,11 @@ module Network.CommSec.Package
 
 import Prelude hiding (seq)
 import qualified Crypto.Cipher.AES128.Internal as AES
-import Crypto.Cipher.AES128.Internal (AESKey)
+import Crypto.Cipher.AES128.Internal (GCM)
 import Crypto.Cipher.AES128 ()
 import qualified Data.ByteString.Internal as B
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as B
-import Crypto.Classes (buildKey)
 import Data.ByteString (ByteString)
 import Data.Bits
 import Data.Maybe (fromMaybe)
@@ -73,24 +72,24 @@ gCtrSize  = 8
 data OutContext =
     Out { aesCtr     :: {-# UNPACK #-} !Word64
         , saltOut    :: {-# UNPACK #-} !Word32
-        , outKey     :: AESKey
+        , outKey     :: GCM
         }
 
 -- | A context useful for receiving data.
 data InContext
     = In  { bitWindow :: {-# UNPACK #-} !BitWindow
-        , saltIn    :: {-# UNPACK #-} !Word32
-        , inKey     :: AESKey
-        }
+          , saltIn      :: {-# UNPACK #-} !Word32
+          , inKey       :: GCM
+          }
     | InStrict
         { seqVal    :: {-# UNPACK #-} !Word64
         , saltIn    :: {-# UNPACK #-} !Word32
-        , inKey     :: AESKey
+        , inKey     :: GCM
         }
     | InSequential
         { seqVal    :: {-# UNPACK #-} !Word64
         , saltIn    :: {-# UNPACK #-} !Word32
-        , inKey     :: AESKey
+        , inKey     :: GCM
         }
 
 
@@ -102,7 +101,7 @@ newOutContext bs
     | otherwise =
         let aesCtr  = 1
             saltOut = unsafePerformIO $ B.unsafeUseAsCString bs $ peekBE32 . castPtr
-            outKey  = fromMaybe (error "Could not build a key") $ buildKey $ B.drop (sizeOf saltOut) bs
+            outKey  = buildGCM $ B.drop (sizeOf saltOut) bs
         in Out {..}
 
 -- | Given at least 20 bytes of entropy, produce an in context that can
@@ -114,15 +113,19 @@ newInContext bs md
         let bitWindow = zeroWindow
             seqVal = 0
             saltIn = unsafePerformIO $ B.unsafeUseAsCString bs $ peekBE32 . castPtr
-            inKey  = fromMaybe (error "Could not build a key") $ buildKey $ B.drop (sizeOf saltIn) bs
+            inKey  = buildGCM $ B.drop (sizeOf saltIn) bs
         in case md of
                AllowOutOfOrder -> In {..}
                StrictOrdering  -> InStrict {..}
                Sequential -> InSequential {..}
 
+buildGCM :: B.ByteString -> GCM
+buildGCM key = unsafePerformIO $ do
+   B.unsafeUseAsCString key $ \bPtr -> AES.generateGCM (castPtr bPtr)
+
 -- Encrypts multiple-of-block-sized input, returing a bytestring of the
 -- [ctr, ct, tag].
-encryptGCM :: AESKey
+encryptGCM :: GCM
            -> Word64     -- ^ AES GCM Counter (IV)
            -> Word32     -- ^ Salt
            -> ByteString -- ^ Plaintext
@@ -135,7 +138,7 @@ encryptGCM key ctr salt pt = unsafePerformIO $ do
 
 -- Encrypts multiple-of-block-sized input, filling a pointer with the
 -- result of [ctr, ct, tag].
-encryptGCMPtr :: AESKey
+encryptGCMPtr :: GCM
            -> Word64 -- ^ AES GCM Counter (IV)
            -> Word32 -- ^ Salt
            -> Ptr Word8 -- ^ Plaintext buffer
@@ -152,10 +155,10 @@ encryptGCMPtr key ctr salt ptPtr ptLen ctPtr = do
       pokeBE ctPtr ctr
       let tagPtr = ctPtr' `plusPtr` ptLen
           ctPtr' = ctPtr `plusPtr` sizeOf ctr
-      AES.encryptGCM key ptrIV ivLen nullPtr 0 (castPtr ptPtr) ptLen (castPtr ctPtr') tagPtr
+      AES.encryptGCM key ptrIV ivLen (castPtr ptPtr) ptLen nullPtr 0 (castPtr ctPtr') tagPtr
 
 -- | GCM decrypt and verify ICV.
-decryptGCMPtr :: AESKey
+decryptGCMPtr :: GCM
               -> Word64    -- ^ AES GCM Counter (IV)
               -> Word32    -- ^ Salt
               -> Ptr Word8 -- ^ Ciphertext
@@ -173,7 +176,7 @@ decryptGCMPtr key ctr salt ctPtr ctLen tagPtr tagLen ptPtr
       -- Build the IV
       pokeBE32 ptrIV salt
       pokeBE (ptrIV `plusPtr` sizeOf salt) ctr
-      AES.decryptGCM key ptrIV ivLen nullPtr 0 (castPtr ctPtr) paddedLen (castPtr ptPtr) ctagPtr
+      AES.decryptGCM key ptrIV ivLen (castPtr ctPtr) paddedLen nullPtr 0 (castPtr ptPtr) ctagPtr
       w1 <- peekBE ctagPtr
       w2 <- peekBE (ctagPtr `plusPtr` sizeOf w1)
       y1 <- peekBE (castPtr tagPtr)
@@ -184,7 +187,7 @@ decryptGCMPtr key ctr salt ctPtr ctLen tagPtr tagLen ptPtr
 
 -- Decrypts multiple-of-block-sized input, returing a bytestring of the
 -- [ctr, ct, tag].
-decryptGCM :: AESKey
+decryptGCM :: GCM
            -> Word64 -- ^ AES GCM Counter (IV)
            -> Word32 -- ^ Salt
            -> ByteString -- ^ Ciphertext
@@ -203,7 +206,7 @@ decryptGCM key ctr salt ct tag
       B.unsafeUseAsCString tag $ \tagPtr -> do
        B.unsafeUseAsCString ct $ \ptrCT -> do
         pt <- B.create paddedLen $ \ptrPT -> do
-                     AES.decryptGCM key ptrIV ivLen nullPtr 0 (castPtr ptrCT) (B.length ct) (castPtr ptrPT) ctagPtr
+                     AES.decryptGCM key ptrIV ivLen (castPtr ptrCT) (B.length ct) nullPtr 0 (castPtr ptrPT) ctagPtr
         w1 <- peekBE ctagPtr
         w2 <- peekBE (ctagPtr `plusPtr` sizeOf w1)
         y1 <- peekBE (castPtr tagPtr)

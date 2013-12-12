@@ -8,8 +8,6 @@ import Control.Concurrent.Async
 import Control.Concurrent
 import Control.Monad
 import Control.Exception (throw)
-import qualified Network.Secure as S
-import OpenSSL
 import Foreign.Marshal.Alloc
 
 ctxIn :: InContext
@@ -37,7 +35,7 @@ pkg512 = fst $ encode ctxOut x512
 pkg1024 = fst $ encode ctxOut x1024
 pkg2048 = fst $ encode ctxOut x2048
 
-main = withOpenSSL $ allocaBytes (2^19) $ \ptr -> do
+main = allocaBytes (2^19) $ \ptr -> do
   let secret = B.replicate 32 0
       port1 = 1982
       port2 = 9843
@@ -46,15 +44,7 @@ main = withOpenSSL $ allocaBytes (2^19) $ \ptr -> do
       port5 = 4843
       port6 = 5843
 
-  id <- S.newLocalIdentity "localhost" 365
-  S.writeIdentity (S.toPeerIdentity id) >>= B.writeFile "blah.pub"
   let me = id
-  you <- B.readFile "blah.pub" >>= S.readIdentity
-  server <- S.newServer (Nothing, "4242")
-  aw0   <- async $ S.accept me [you] server
-  c0 <- S.connect me [you] ("localhost", "4242")
-  a0 <- wait aw0
-
   aw1 <- async $ accept secret port1
   threadDelay 10000
   c1 <- connect secret "127.0.0.1" port1
@@ -87,10 +77,7 @@ main = withOpenSSL $ allocaBytes (2^19) $ \ptr -> do
               , bench "send stream 2048b" $ send c1 x2048
               , bench "send/recv stream 16b (ptr)" $ (sendPtr c2 ptr 16 >> recvPtr a2 ptr 2048)
               , bench "send/recv stream 16b" $ (send c2 x16 >> recv a2)
-              , bench "secure-sockets 16b" $ (S.write c0 x16 >> S.read a0 16)
               , bench "send/recv stream 2048b (ptr)" $ (sendPtr c2 ptr 2048 >> recvPtr a2 ptr 2048)
               , bench "send/recv stream 512KB (ptr)" $ (sendPtr c2 ptr (2^19) >> recvPtr a2 ptr (2^19))
               , bench "send/recv stream 2048b" $ (send c2 x2048 >> recv a2)
-              , bench "secure-sockets 2048b" $ (S.write c0 x2048 >> S.read a0 2048)
-              -- , bench "secure-sockets 512KB" $ (S.write c0 x512K >> S.read a0 (2^19))
               ]
