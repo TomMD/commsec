@@ -58,10 +58,10 @@ Currently the performance of comm-sec is all about the AESgcm routine, which is 
 <td>Send(safe)</td>        <td>2048</td>         <td>38</td>
 </tr>
 <tr>
-<td>Send+Recv(safe)</td>   <td>16</td>         <td>10</td>
+<td>Send+Recv(safe)</td>   <td>16</td>         <td>6</td>
 </tr>
 <tr>
-<td>Send+Recv(safe)</td>   <td>2048</td>         <td>76</td>
+<td>Send+Recv(safe)</td>   <td>2048</td>         <td>69</td>
 </tr>
 <tr>
 <td>secure-sockets package</td> <td>16</td>         <td>29</td>
