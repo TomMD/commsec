@@ -37,7 +37,7 @@ module Network.CommSec.Package
 
 import Prelude hiding (seq)
 import qualified Crypto.Cipher.AES128.Internal as AES
-import Crypto.Cipher.AES128.Internal (GCM)
+import Crypto.Cipher.AES128.Internal (GCMpc, AESKey128)
 import Crypto.Cipher.AES128 ()
 import qualified Data.ByteString.Internal as B
 import qualified Data.ByteString as B
@@ -68,28 +68,34 @@ gCtrSize  = 8
 --
 --      [CNT (used for both the IV and seq) | CT of Payload | ICV]
 
+-- | A tuple of key and precomputed data for use by GCM
+data GCMdata = GCMdata { gcmkey :: AESKey128
+                       , gcmpc  :: GCMpc
+                       }
+
+
 -- | A context useful for sending data.
 data OutContext =
     Out { aesCtr     :: {-# UNPACK #-} !Word64
         , saltOut    :: {-# UNPACK #-} !Word32
-        , outKey     :: GCM
+        , outKey     :: GCMdata
         }
 
 -- | A context useful for receiving data.
 data InContext
-    = In  { bitWindow :: {-# UNPACK #-} !BitWindow
+    = In  { bitWindow   :: {-# UNPACK #-} !BitWindow
           , saltIn      :: {-# UNPACK #-} !Word32
-          , inKey       :: GCM
+          , inKey       :: GCMdata
           }
     | InStrict
         { seqVal    :: {-# UNPACK #-} !Word64
         , saltIn    :: {-# UNPACK #-} !Word32
-        , inKey     :: GCM
+        , inKey     :: GCMdata
         }
     | InSequential
         { seqVal    :: {-# UNPACK #-} !Word64
         , saltIn    :: {-# UNPACK #-} !Word32
-        , inKey     :: GCM
+        , inKey     :: GCMdata
         }
 
 
@@ -119,13 +125,19 @@ newInContext bs md
                StrictOrdering  -> InStrict {..}
                Sequential -> InSequential {..}
 
-buildGCM :: B.ByteString -> GCM
-buildGCM key = unsafePerformIO $ do
-   B.unsafeUseAsCString key $ \bPtr -> AES.generateGCM (castPtr bPtr)
+buildGCM :: B.ByteString -> GCMdata
+buildGCM key 
+  | B.length key >= 16 = unsafePerformIO $
+     B.unsafeUseAsCString key $ \bPtr -> do
+       kStruct <- AES.generateKey128 (castPtr bPtr)
+       case kStruct of
+           Just t  -> GCMdata t `fmap` AES.precomputeGCMdata t
+           Nothing -> throw BuildKeyFailure
+  | otherwise = throw BuildKeyFailure
 
 -- Encrypts multiple-of-block-sized input, returing a bytestring of the
 -- [ctr, ct, tag].
-encryptGCM :: GCM
+encryptGCM :: GCMdata
            -> Word64     -- ^ AES GCM Counter (IV)
            -> Word32     -- ^ Salt
            -> ByteString -- ^ Plaintext
@@ -138,14 +150,14 @@ encryptGCM key ctr salt pt = unsafePerformIO $ do
 
 -- Encrypts multiple-of-block-sized input, filling a pointer with the
 -- result of [ctr, ct, tag].
-encryptGCMPtr :: GCM
+encryptGCMPtr :: GCMdata
            -> Word64 -- ^ AES GCM Counter (IV)
            -> Word32 -- ^ Salt
            -> Ptr Word8 -- ^ Plaintext buffer
            -> Int       -- ^ Plaintext length
            -> Ptr Word8 -- ^ ciphertext buffer (at least encBytes large)
            -> IO ()
-encryptGCMPtr key ctr salt ptPtr ptLen ctPtr = do
+encryptGCMPtr (GCMdata {..}) ctr salt ptPtr ptLen ctPtr = do
     let ivLen  = sizeOf ctr + sizeOf salt
         tagLen = gTagLen
     allocaBytes ivLen $ \ptrIV -> do
@@ -155,10 +167,10 @@ encryptGCMPtr key ctr salt ptPtr ptLen ctPtr = do
       pokeBE ctPtr ctr
       let tagPtr = ctPtr' `plusPtr` ptLen
           ctPtr' = ctPtr `plusPtr` sizeOf ctr
-      AES.encryptGCM key ptrIV ivLen (castPtr ptPtr) ptLen nullPtr 0 (castPtr ctPtr') tagPtr
+      AES.encryptGCM gcmkey gcmpc ptrIV (fromIntegral ivLen) nullPtr 0 (castPtr ptPtr) (fromIntegral ptLen) (castPtr ctPtr') tagPtr
 
 -- | GCM decrypt and verify ICV.
-decryptGCMPtr :: GCM
+decryptGCMPtr :: GCMdata
               -> Word64    -- ^ AES GCM Counter (IV)
               -> Word32    -- ^ Salt
               -> Ptr Word8 -- ^ Ciphertext
@@ -167,7 +179,7 @@ decryptGCMPtr :: GCM
               -> Int       -- ^ Tag length
               -> Ptr Word8 -- ^ Plaintext result ptr (at least 'decBytes' large)
               -> IO (Either CommSecError ())
-decryptGCMPtr key ctr salt ctPtr ctLen tagPtr tagLen ptPtr
+decryptGCMPtr (GCMdata {..}) ctr salt ctPtr ctLen tagPtr tagLen ptPtr
   | tagLen /= gTagLen = return $ Left InvalidICV
   | otherwise = do
     let ivLen     = sizeOf ctr + sizeOf salt
@@ -176,7 +188,7 @@ decryptGCMPtr key ctr salt ctPtr ctLen tagPtr tagLen ptPtr
       -- Build the IV
       pokeBE32 ptrIV salt
       pokeBE (ptrIV `plusPtr` sizeOf salt) ctr
-      AES.decryptGCM key ptrIV ivLen (castPtr ctPtr) paddedLen nullPtr 0 (castPtr ptPtr) ctagPtr
+      AES.decryptGCM gcmkey gcmpc ptrIV (fromIntegral ivLen) nullPtr 0 (castPtr ctPtr) (fromIntegral paddedLen) (castPtr ptPtr) ctagPtr
       w1 <- peekBE ctagPtr
       w2 <- peekBE (ctagPtr `plusPtr` sizeOf w1)
       y1 <- peekBE (castPtr tagPtr)
@@ -187,13 +199,13 @@ decryptGCMPtr key ctr salt ctPtr ctLen tagPtr tagLen ptPtr
 
 -- Decrypts multiple-of-block-sized input, returing a bytestring of the
 -- [ctr, ct, tag].
-decryptGCM :: GCM
+decryptGCM :: GCMdata
            -> Word64 -- ^ AES GCM Counter (IV)
            -> Word32 -- ^ Salt
            -> ByteString -- ^ Ciphertext
            -> ByteString -- ^ Tag
            -> Either CommSecError ByteString -- Plaintext (or an exception due to bad tag)
-decryptGCM key ctr salt ct tag
+decryptGCM (GCMdata {..}) ctr salt ct tag
   | B.length tag < gTagLen = Left InvalidICV
   | otherwise = unsafePerformIO $ do
     let ivLen  = sizeOf ctr + sizeOf salt
@@ -206,7 +218,7 @@ decryptGCM key ctr salt ct tag
       B.unsafeUseAsCString tag $ \tagPtr -> do
        B.unsafeUseAsCString ct $ \ptrCT -> do
         pt <- B.create paddedLen $ \ptrPT -> do
-                     AES.decryptGCM key ptrIV ivLen (castPtr ptrCT) (B.length ct) nullPtr 0 (castPtr ptrPT) ctagPtr
+                     AES.decryptGCM gcmkey gcmpc ptrIV (fromIntegral ivLen) nullPtr 0 (castPtr ptrCT) (fromIntegral $ B.length ct) (castPtr ptrPT) ctagPtr
         w1 <- peekBE ctagPtr
         w2 <- peekBE (ctagPtr `plusPtr` sizeOf w1)
         y1 <- peekBE (castPtr tagPtr)

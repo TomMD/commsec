@@ -9,10 +9,11 @@ import Control.Concurrent.MVar
 
 -- |Errors that can be returned by the decoding/receicing operations.
 data CommSecError
-        = OldContext    -- The context is too old (sequence number rollover)
-        | DuplicateSeq  -- The sequence number we previously seen (possible replay attack)
-        | InvalidICV    -- The integrity check value is invalid
-        | BadPadding    -- The padding was invalid (corrupt sender?)
+        = OldContext      -- The context is too old (sequence number rollover)
+        | DuplicateSeq    -- The sequence number we previously seen (possible replay attack)
+        | InvalidICV      -- The integrity check value is invalid
+        | BadPadding      -- The padding was invalid (corrupt sender?)
+        | BuildKeyFailure -- The entropy was insufficent to build a key (bytestring too short)
     deriving (Eq,Ord,Show,Enum,Data,Typeable)
 
 -- |Policy for misordered packets.  Notice StrictOrdering does not mean

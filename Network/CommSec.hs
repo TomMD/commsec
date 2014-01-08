@@ -20,7 +20,7 @@ module Network.CommSec
 
 import Crypto.Classes (buildKey)
 import Crypto.Cipher.AES128.Internal (encryptCTR)
-import Crypto.Cipher.AES128 (AESKey)
+import Crypto.Cipher.AES128 (AESKey128, ctr, zeroIV)
 import Network.CommSec.Package
 import Network.CommSec.Types
 import Network.Socket ( Socket, SocketType(..), SockAddr, AddrInfo(..)
@@ -161,19 +161,10 @@ sendBytesPtr s p l = do
 -- Use counter mode to expand input entropy that is at least 16 bytes long
 expandSecret :: B.ByteString -> Int -> B.ByteString
 expandSecret entropy sz =
-    let k = buildKey entropy
+    let k = buildKey entropy :: Maybe AESKey128
     in case k of
            Nothing  -> error "Build key failed"
-           Just key ->
-              let iv = B.replicate 16 0
-              in enc key iv input
- where
-  input = B.replicate sz 0
-  enc :: AESKey -> B.ByteString -> B.ByteString -> B.ByteString
-  enc k i pt = B.unsafeCreate sz $ \ctPtr ->
-                B.useAsCString pt $ \ptPtr ->
-                 B.useAsCString i $ \iv ->
-                   encryptCTR k (castPtr iv) nullPtr (castPtr ctPtr) (castPtr ptPtr) sz
+           Just key -> fst $ ctr key zeroIV (B.replicate sz 0)
 
 -- |Expands the provided 128 (or more) bit secret into two
 -- keys to create a connection.
