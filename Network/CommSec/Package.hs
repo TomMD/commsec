@@ -8,13 +8,12 @@
 -- PKI might be added later.
 module Network.CommSec.Package
     ( -- * Types
-      OutContext(..)
-    , InContext(..)
+      OutContext
+    , InContext
     , CommSecError(..)
     , SequenceMode(..)
-    -- , Secret, Socket
       -- * Build contexts for use sending and receiving
-    , newInContext, newOutContext -- , newSecret
+    , newInContext, newOutContext, inContext, outContext
       -- * Pure / ByteString based encryption and decryption routines
     , decode
     , encode
@@ -24,10 +23,6 @@ module Network.CommSec.Package
     -- * Utility functions
     , encBytes, decBytes
      -- * Wrappers for network sending and receiving
-    -- , send, recv
-    -- , sendPtr, recvPtr
-    -- , connect, unsafeConnect
-    -- , listen, unsafeListen
     -- * Utilities
     , peekBE32
     , pokeBE32
@@ -110,6 +105,15 @@ newOutContext bs
             outKey  = buildGCM $ B.drop (sizeOf saltOut) bs
         in Out {..}
 
+-- | Construct an out context from a counter, salt, and AES key.
+outContext :: Word64 -> Word32 -> AESKey128 -> OutContext
+outContext c s k = Out c s (GCMdata k (precomputeGCMdata k))
+
+-- | Construct an in context from a counter, salt, and AES key.
+-- The in context will be 'StrictOrdering'.
+inContext :: Word64 -> Word32 -> AESKey128 -> InContext
+inContext c s k = InStrict c s (GCMdata k (precomputeGCMdata k))
+
 -- | Given at least 20 bytes of entropy, produce an in context that can
 -- communicate with an identically initialized out context.
 newInContext  :: ByteString -> SequenceMode -> InContext
@@ -126,12 +130,12 @@ newInContext bs md
                Sequential -> InSequential {..}
 
 buildGCM :: B.ByteString -> GCMdata
-buildGCM key 
+buildGCM key
   | B.length key >= 16 = unsafePerformIO $
      B.unsafeUseAsCString key $ \bPtr -> do
        kStruct <- AES.generateKey128 (castPtr bPtr)
        case kStruct of
-           Just t  -> GCMdata t `fmap` AES.precomputeGCMdata t
+           Just t  -> return $ GCMdata t (precomputeGCMdata t)
            Nothing -> throw BuildKeyFailure
   | otherwise = throw BuildKeyFailure
 
@@ -338,3 +342,6 @@ peekBE32 p = do
     as <- mapM op [0..3]
     return (foldl1' (\r a -> (r `shiftL` 8) .|. a) as)
 {-# INLINE peekBE32 #-}
+
+precomputeGCMdata :: AESKey128 -> GCMpc
+precomputeGCMdata = unsafePerformIO . AES.precomputeGCMdata
