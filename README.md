@@ -1,37 +1,4 @@
-##Introduction
-
-CommSec provides encryption over datagram-style communications with goals of
-confidentiallity, integrity, and replay protection. The original motivation was
-to provide a thread-safe alternative to a subset of the functionallity of the
-secure-sockets package.
-
-##Use
-
-Use wisely.  If you aren't familiar with the concept of ephemeral keys then use
-secure-sockets instead. There has been no peer review and no formal development
-methodology was used, so users with strong security needs are advised to weigh
-the risks.
-
-##Types
-* Contexts: Contexts can either be 'In', for decrypting/receiving, or 'Out',
-  for encrypting/sending.  A context includes an AES key and counter.
-
-* Connection: a bidirectional communication channel that allows
-  sending/receiving.  Connections can be 'Unsafe', meaning they shouldn't be
-  used concurrently, or 'Safe', meaning they protect critical access with an MVar
-  and should be safe for concurrent use.  Notice the constructor to connection is
-  exported, allowing users or third-party packages to use the commsec calls with
-  any sort of 'Socket'.
-
-##Operations
-
-* encode/decode - Using an 'InContext', encode will package up a plaintext
-  message into a ciphertext datagram.  Decode will unpack these datagrams into
-  plaintext messages.
-
-* connect/accept - Connect and Accept are bundled up socket operations that
-  return a 'Connection' which can be used for bidirectional communication.
-
+##
 * send/recv - Send or receive data over a previously established connection
 
 ##Exceptions
@@ -64,11 +31,7 @@ Currently the performance of comm-sec is all about the AESgcm routine, which is 
 <td>Send+Recv(safe)</td>   <td>2048</td>         <td>69</td>
 </tr>
 <tr>
-<td>secure-sockets package</td> <td>16</td>         <td>29</td>
-</tr>
-<tr>
-<td>secure-sockets package</td> <td>2048</td>         <td>40</td>
-</tr>
+<td>
 </table>
 
 ##Related Tools
